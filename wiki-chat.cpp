@@ -8,6 +8,7 @@
 #include "build-info.h"
 #include "modules/category_fetch.h"
 #include "modules/datetime_fetch.h"
+#include "modules/logo_banner.h"
 #include "modules/math_fetch.h"
 #include "modules/memory_store.h"
 #include "modules/news_fetch.h"
@@ -605,6 +606,7 @@ int main(int argc, char ** argv) {
                 break;
             }
             if (lower == "/version" || lower == "/ver") {
+                printf("%s", BYTE_LOGO_BANNER);
                 printf("Byte AI 4.0 \"Tera\"\n");
                 printf("llama.cpp build %d (%s), %s\n", llama_build_number(), llama_commit(), llama_build_target());
                 printf("model: %s\n", model_path.c_str());

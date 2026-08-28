@@ -269,7 +269,7 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 
 ### Session Commands
 ```
-/version           Show Byte AI version, llama.cpp build, and loaded model
+/version           Show a full-color ASCII-art logo, Byte AI version, llama.cpp build, and loaded model
 /user <name>        Tell Byte your name; it addresses you by it going forward
 /namechat <name>    Start a completely new, named chat (clears context/KV cache)
 /save [name]        Save the conversation to ~/Byte/<name>.Byte_Mem
@@ -406,11 +406,14 @@ Byte-AI-Tera/
 │   ├── memory_store.{h,cpp}   # SQLite FTS5 cross-session memory, recall, forget
 │   ├── scheduler.{h,cpp}      # local cron-based scheduled automations
 │   ├── category_fetch.{h,cpp} # dynamically-loaded, GitHub-hosted knowledge base
-│   └── training_log.{h,cpp}   # local training corpus collection
+│   ├── training_log.{h,cpp}   # local training corpus collection
+│   └── logo_banner.h          # auto-generated full-color ASCII logo, shown by /version
+├── Byte_AI.png                 # source logo
 ├── data/knowledge/            # the knowledge base itself: categories.json manifest +
 │                               # <category>/chunk-N.txt, distilled from Qwen2.5 3B
 ├── scripts/
-│   └── generate_knowledge.py  # (re)generates knowledge-base categories via Ollama
+│   ├── generate_knowledge.py     # (re)generates knowledge-base categories via Ollama
+│   └── generate_logo_ascii.py    # regenerates modules/logo_banner.h from Byte_AI.png
 ├── retrain.sh                 # folds the corpus back into the model via llama-finetune
 ├── CMakeLists.txt             # builds llama-wiki-chat once dropped into llama.cpp/examples/
 └── README.md                  # this file
