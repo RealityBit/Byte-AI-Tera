@@ -23,6 +23,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <clocale>
 #include <cstdio>
@@ -59,7 +60,7 @@ static const std::vector<std::string> & known_commands() {
         "/bye", "/quit", "/end", "/exit", "/version", "/ver", "/model", "/user", "/history",
         "/knowledge", "/namechat", "/save", "/load", "/forget", "/delchat", "/newchat",
         "/secret", "/schedule", "/schedules", "/unschedule", "/wipecfg", "/downloadmodel",
-        "/listmods", "/switchmod", "/modeset", "/help",
+        "/listmods", "/switchmod", "/modeset", "/help", "/specs",
     };
     return cmds;
 }
@@ -699,22 +700,104 @@ int main(int argc, char ** argv) {
     bool secret_mode = false; // set via /secret; suppresses memory/training logging while on
     std::string user_name = load_config_user_name(); // persisted in ~/Byte/config.json across sessions
 
+    // runs a shell command and captures stdout, matching the popen pattern
+    // already used in modules/scheduler.cpp for crontab access
+    auto run_capture = [](const std::string & cmd) {
+        std::string out;
+        FILE * pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            return out;
+        }
+        std::array<char, 4096> buf;
+        size_t n;
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
+            out.append(buf.data(), n);
+        }
+        pclose(pipe);
+        return out;
+    };
+
+    // gathers real platform/hardware info via the real fastfetch CLI (MIT
+    // licensed, github.com/fastfetch-cli/fastfetch) when it's installed --
+    // it already knows how to correctly enumerate CPU/GPU/memory/OS/etc on
+    // every platform, so there's no reason to keep hand-rolling that via
+    // ggml's device API. --logo none drops the ASCII art banner; --pipe
+    // additionally strips ANSI color codes, which we want for the copy fed
+    // into the model's context (colored escape codes would just be noise
+    // there) but not for /specs, which prints the colored version straight
+    // to the terminal for the user to read directly. falls back to a
+    // minimal uname()+ggml summary if fastfetch isn't on PATH.
+    //
+    // used both to feed the model context and by /specs, which prints it
+    // directly -- the model can't be trusted to faithfully relay this any
+    // more than weather/wiki results (verified: it was given the GPU device
+    // and reported "no GPU" anyway), so /specs bypasses generation entirely
+    auto fastfetch_available = [&]() {
+        return run_capture("command -v fastfetch 2>/dev/null").find("fastfetch") != std::string::npos;
+    };
+
+    auto gather_system_specs_fallback = [&]() {
+        struct utsname uts;
+        std::string os_info = (uname(&uts) == 0)
+            ? std::string(uts.sysname) + " " + uts.release + ", " + uts.machine
+            : "unknown platform";
+
+        std::string devices_info;
+        size_t n_devices = ggml_backend_dev_count();
+        for (size_t i = 0; i < n_devices; i++) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            ggml_backend_dev_props props;
+            ggml_backend_dev_get_props(dev, &props);
+
+            const char * type_str = props.type == GGML_BACKEND_DEVICE_TYPE_GPU ? "GPU" :
+                                     props.type == GGML_BACKEND_DEVICE_TYPE_CPU ? "CPU" : "ACCEL";
+            char mem_buf[64];
+            snprintf(mem_buf, sizeof(mem_buf), "%.1f/%.1f GB free/total",
+                     props.memory_free / 1073741824.0, props.memory_total / 1073741824.0);
+
+            devices_info += std::string("\n  - [") + type_str + "] " + props.name + " (" + props.description +
+                             "), " + mem_buf;
+        }
+
+        return "platform: " + os_info +
+                  "\nllama.cpp: build " + std::to_string(llama_build_number()) + " (" + llama_commit() +
+                  "), " + llama_build_target() +
+                  "\ngpu offload: " + (ngl > 0 ? "enabled (-ngl " + std::to_string(ngl) + ")" : "disabled (CPU-only)") +
+                  "\nmodel: " + model_path +
+                  "\ndevices:" + devices_info;
+    };
+
+    // plain-text (no ANSI colors) version for injecting into the model's context
+    auto gather_system_specs = [&]() {
+        if (!fastfetch_available()) {
+            return gather_system_specs_fallback();
+        }
+        std::string out = run_capture("fastfetch --logo none --pipe 2>/dev/null");
+        if (out.empty()) {
+            return gather_system_specs_fallback();
+        }
+        return "llama.cpp model: " + model_path +
+               "\ngpu offload: " + (ngl > 0 ? "enabled (-ngl " + std::to_string(ngl) + ")" : "disabled (CPU-only)") +
+               "\n" + out;
+    };
+
+    // colored version for /specs to print straight to the terminal
+    auto gather_system_specs_display = [&]() {
+        if (!fastfetch_available()) {
+            return gather_system_specs_fallback();
+        }
+        std::string out = run_capture("fastfetch --logo none 2>/dev/null");
+        return out.empty() ? gather_system_specs_fallback() : out;
+    };
+
     // rebuilds messages[0] from BYTE_SYSTEM_PROMPT plus the user's name, if set.
     // like the other system-prompt edits in this codebase, this only affects
     // prompts built from here on -- context already decoded into the KV cache
     // keeps whatever system prompt was in effect at the time
     auto update_system_prompt = [&]() {
         std::string prompt = BYTE_SYSTEM_PROMPT;
-
-        struct utsname uts;
-        std::string os_info = (uname(&uts) == 0)
-            ? std::string(uts.sysname) + " " + uts.release + ", " + uts.machine
-            : "unknown platform";
-        prompt += " You are currently running on " + os_info + ", via llama.cpp build " +
-                  std::to_string(llama_build_number()) + " (" + llama_commit() + ", " +
-                  llama_build_target() + "), " + (ngl > 0 ? "with GPU layer offload enabled (-ngl " +
-                  std::to_string(ngl) + ")" : "CPU-only") + ", running model file \"" + model_path +
-                  "\". Mention this if the user asks what platform or hardware you're running on.";
+        prompt += " Here is your current platform/hardware info -- state it directly if asked, don't "
+                  "guess or omit parts of it:\n" + gather_system_specs();
 
         if (!user_name.empty()) {
             prompt += " The user you're talking to is named " + user_name + "; address them by name naturally.";
@@ -1052,6 +1135,7 @@ int main(int argc, char ** argv) {
                     "    /bye, /quit, /end, /exit   exit\n"
                     "    /version, /ver              logo + version\n"
                     "    /model                      llama.cpp build + loaded model path\n"
+                    "    /specs                       real system specs (via fastfetch)\n"
                     "    /help                        this list\n"
                     "\n"
                     "  Identity & config\n"
@@ -1092,6 +1176,10 @@ int main(int argc, char ** argv) {
             if (lower == "/model") {
                 printf("llama.cpp build %d (%s), %s\n", llama_build_number(), llama_commit(), llama_build_target());
                 printf("model: %s\n", model_path.c_str());
+                continue;
+            }
+            if (lower == "/specs") {
+                printf("%s\n", gather_system_specs_display().c_str());
                 continue;
             }
             if (lower.rfind("/user", 0) == 0) {
