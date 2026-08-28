@@ -58,6 +58,7 @@ static const std::vector<std::string> & known_commands() {
         "/bye", "/quit", "/end", "/exit", "/version", "/ver", "/model", "/user", "/history",
         "/knowledge", "/namechat", "/save", "/load", "/forget", "/delchat", "/newchat",
         "/secret", "/schedule", "/schedules", "/unschedule", "/wipecfg", "/downloadmodel",
+        "/listmods", "/switchmod",
     };
     return cmds;
 }
@@ -602,6 +603,57 @@ int main(int argc, char ** argv) {
         }
     };
 
+    // hot-swaps the loaded model without restarting the process. conversation
+    // state tied to the old model's tokenizer/KV cache can't carry over to a
+    // different model, so this resets the chat the same way /newchat does
+    auto switch_model = [&](const std::string & path) -> bool {
+        llama_model_params new_model_params = llama_model_default_params();
+        new_model_params.n_gpu_layers = ngl;
+
+        llama_model * new_model = llama_model_load_from_file(path.c_str(), new_model_params);
+        if (!new_model) {
+            return false;
+        }
+
+        llama_context_params new_ctx_params = llama_context_default_params();
+        new_ctx_params.n_ctx   = n_ctx;
+        new_ctx_params.n_batch = n_ctx;
+
+        llama_context * new_ctx = llama_init_from_model(new_model, new_ctx_params);
+        if (!new_ctx) {
+            llama_model_free(new_model);
+            return false;
+        }
+
+        llama_sampler * new_smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(new_smpl, llama_sampler_init_min_p(0.05f, 1));
+        llama_sampler_chain_add(new_smpl, llama_sampler_init_temp(0.8f));
+        llama_sampler_chain_add(new_smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+
+        llama_sampler_free(smpl);
+        llama_free(ctx);
+        llama_model_free(model);
+
+        model = new_model;
+        ctx   = new_ctx;
+        smpl  = new_smpl;
+        vocab = llama_model_get_vocab(model);
+
+        char resolved[PATH_MAX];
+        model_path = realpath(path.c_str(), resolved) ? resolved : path;
+
+        for (size_t i = 1; i < messages.size(); i++) {
+            free(const_cast<char *>(messages[i].content));
+        }
+        messages.resize(1);
+        history.clear();
+        prev_len = 0;
+        formatted.assign((size_t) llama_n_ctx(ctx), 0);
+        update_system_prompt();
+
+        return true;
+    };
+
     // --batch mode: a single non-interactive turn, meant to be re-invoked by
     // cron via /schedule. routes through the same tool detectors as the
     // interactive loop, generates one reply, appends it to --report, and exits
@@ -741,6 +793,65 @@ int main(int argc, char ** argv) {
                     printf("done -- verified checksum. Launch with -m %s to use it.\n", out_path.c_str());
                 } else {
                     printf("download failed or was incomplete -- run /downloadmodel again to resume\n");
+                }
+                continue;
+            }
+            if (lower == "/listmods") {
+                std::string dir = default_byte_path("models");
+                DIR * d = opendir(dir.c_str());
+                bool any = false;
+
+                printf("current: %s\n", model_path.c_str());
+                if (d) {
+                    while (dirent * entry = readdir(d)) {
+                        std::string name = entry->d_name;
+                        if (name.size() < 5 || name.compare(name.size() - 5, 5, ".gguf") != 0) {
+                            continue;
+                        }
+                        any = true;
+                        std::string full = dir + "/" + name;
+                        struct stat st;
+                        double mb = stat(full.c_str(), &st) == 0 ? st.st_size / (1024.0 * 1024.0) : 0.0;
+                        printf("  %-40s %8.0f MB%s\n", name.c_str(), mb,
+                               full == model_path ? "  (loaded)" : "");
+                    }
+                    closedir(d);
+                }
+                if (!any) {
+                    printf("no models in ~/Byte/models -- try /downloadmodel\n");
+                }
+                continue;
+            }
+            if (lower.rfind("/switchmod", 0) == 0) {
+                std::string name = user.size() > 10 ? user.substr(10) : "";
+                size_t a = name.find_first_not_of(' ');
+                name = (a == std::string::npos) ? "" : name.substr(a);
+
+                if (name.empty()) {
+                    printf("usage: /switchmod <name-or-path> (see /listmods for names)\n");
+                    continue;
+                }
+
+                std::string dir = default_byte_path("models");
+                std::vector<std::string> candidates = {name, dir + "/" + name, dir + "/" + name + ".gguf"};
+                std::string resolved_path;
+                for (const auto & c : candidates) {
+                    struct stat st;
+                    if (stat(c.c_str(), &st) == 0) {
+                        resolved_path = c;
+                        break;
+                    }
+                }
+
+                if (resolved_path.empty()) {
+                    printf("no model found matching \"%s\" -- see /listmods\n", name.c_str());
+                } else {
+                    printf("switching to %s ...\n", resolved_path.c_str());
+                    if (switch_model(resolved_path)) {
+                        printf("now using %s (conversation reset -- different model, different context)\n", model_path.c_str());
+                    } else {
+                        printf("failed to load %s -- staying on the previous model\n", resolved_path.c_str());
+                    }
                 }
                 continue;
             }
