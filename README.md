@@ -150,6 +150,7 @@ cross-session recall.
 #### Save / Load / Manage Conversations
 ```
 /user Retro              Tell Byte your name; it addresses you by it going forward
+                         (persisted to ~/Byte/config.json, so it's remembered next launch too)
 /namechat project-x      Start a completely new chat, named (context/KV cache reset)
 /save [name]             Save the conversation to ~/Byte/<name>.Byte_Mem
 /load <name>             Resume a saved conversation -- actually decoded back into
@@ -271,6 +272,7 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 ```
 /version           Show the full-color ASCII-art logo and Byte AI version
 /model             Show the llama.cpp build and loaded model path
+/wipecfg           Delete ~/Byte/config.json and reset persisted settings (currently /user's name)
 /user <name>        Tell Byte your name; it addresses you by it going forward
 /namechat <name>    Start a completely new, named chat (clears context/KV cache)
 /save [name]        Save the conversation to ~/Byte/<name>.Byte_Mem

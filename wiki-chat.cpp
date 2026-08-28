@@ -56,7 +56,7 @@ static const std::vector<std::string> & known_commands() {
     static const std::vector<std::string> cmds = {
         "/bye", "/quit", "/end", "/exit", "/version", "/ver", "/model", "/user", "/history",
         "/knowledge", "/namechat", "/save", "/load", "/forget", "/delchat", "/newchat",
-        "/secret", "/schedule", "/schedules", "/unschedule",
+        "/secret", "/schedule", "/schedules", "/unschedule", "/wipecfg",
     };
     return cmds;
 }
@@ -160,6 +160,52 @@ static std::string sanitize_filename(const std::string & name) {
         out.erase(out.begin());
     }
     return out;
+}
+
+// ~/Byte/config.json: persists settings (currently just /user's name) across
+// sessions, independent of any saved chat
+static std::optional<std::string> config_path() {
+    const char * home = getenv("HOME");
+    if (!home) {
+        return std::nullopt;
+    }
+    std::string dir = std::string(home) + "/Byte";
+    mkdir(dir.c_str(), 0755);
+    return dir + "/config.json";
+}
+
+static std::string load_config_user_name() {
+    auto path = config_path();
+    if (!path) {
+        return "";
+    }
+    std::ifstream in(*path);
+    if (!in.is_open()) {
+        return "";
+    }
+    try {
+        nlohmann::json j;
+        in >> j;
+        return j.value("user_name", "");
+    } catch (const std::exception &) {
+        return "";
+    }
+}
+
+static void save_config_user_name(const std::string & name) {
+    auto path = config_path();
+    if (!path) {
+        return;
+    }
+    std::ofstream out(*path);
+    if (out.is_open()) {
+        out << nlohmann::json{{"user_name", name}}.dump(2);
+    }
+}
+
+static bool wipe_config() {
+    auto path = config_path();
+    return path && remove(path->c_str()) == 0;
 }
 
 // saves the current conversation to ~/Byte/<name>.Byte_Mem as JSON
@@ -425,7 +471,7 @@ int main(int argc, char ** argv) {
     std::vector<wiki_turn> history;
     std::string chat_name; // set via /namechat; lets a bare /save reuse it automatically
     bool secret_mode = false; // set via /secret; suppresses memory/training logging while on
-    std::string user_name; // set via /user; folded into the system prompt so Byte addresses them by name
+    std::string user_name = load_config_user_name(); // persisted in ~/Byte/config.json across sessions
 
     // rebuilds messages[0] from BYTE_SYSTEM_PROMPT plus the user's name, if set.
     // like the other system-prompt edits in this codebase, this only affects
@@ -439,6 +485,9 @@ int main(int argc, char ** argv) {
         free(const_cast<char *>(messages[0].content));
         messages[0].content = strdup(prompt.c_str());
     };
+    if (!user_name.empty()) {
+        update_system_prompt(); // picked up from ~/Byte/config.json at startup
+    }
     std::vector<char> formatted(llama_n_ctx(ctx));
     int prev_len = 0;
 
@@ -647,7 +696,19 @@ int main(int argc, char ** argv) {
                 } else {
                     user_name = name;
                     update_system_prompt();
-                    printf("got it -- I'll call you %s\n", user_name.c_str());
+                    save_config_user_name(user_name);
+                    printf("got it -- I'll call you %s (saved to ~/Byte/config.json)\n", user_name.c_str());
+                }
+                continue;
+            }
+            if (lower == "/wipecfg") {
+                bool removed = wipe_config();
+                user_name.clear();
+                update_system_prompt();
+                if (removed) {
+                    printf("config wiped -- ~/Byte/config.json removed\n");
+                } else {
+                    printf("no config file to wipe\n");
                 }
                 continue;
             }
