@@ -234,7 +234,7 @@ static std::vector<std::string> list_saved_chats() {
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [--cache path.json] [--train-log path.txt] [--memory-db path.db] [--report path.txt] [--batch \"prompt\"]\n", argv[0]);
+    printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [--cache path.json] [--train-log path.txt] [--memory-db path.db] [--report path.txt] [--batch \"prompt\"] [--knowledge-budget-mb N]\n", argv[0]);
     printf("\n");
 }
 
@@ -246,6 +246,7 @@ int main(int argc, char ** argv) {
     std::string train_log_path = "wiki-chat-training.txt";
     std::string memory_db_path = "wiki-chat-memory.db";
     std::string category_cache_path = "wiki-chat-category-cache.json";
+    uint64_t knowledge_budget_mb = 0; // 0 = unbounded
     std::string report_path = "wiki-chat-reports.txt";
     std::optional<std::string> batch_prompt;
     int ngl   = 99;
@@ -267,6 +268,8 @@ int main(int argc, char ** argv) {
                 memory_db_path = argv[++i];
             } else if (strcmp(argv[i], "--category-cache") == 0 && i + 1 < argc) {
                 category_cache_path = argv[++i];
+            } else if (strcmp(argv[i], "--knowledge-budget-mb") == 0 && i + 1 < argc) {
+                knowledge_budget_mb = std::stoull(argv[++i]);
             } else if (strcmp(argv[i], "--report") == 0 && i + 1 < argc) {
                 report_path = argv[++i];
             } else if (strcmp(argv[i], "--batch") == 0 && i + 1 < argc) {
@@ -341,7 +344,7 @@ int main(int argc, char ** argv) {
 
     wiki_fetch wiki(cache_path);
     memory_store memory(memory_db_path);
-    category_fetch categories(category_cache_path);
+    category_fetch categories(category_cache_path, knowledge_budget_mb * 1024ULL * 1024ULL);
     int64_t session_id = memory.start_session();
 
     auto generate = [&](const std::string & prompt) {
@@ -631,6 +634,17 @@ int main(int argc, char ** argv) {
                         printf("  %s\n", name.c_str());
                     }
                 }
+                continue;
+            }
+            if (lower == "/knowledge") {
+                uint64_t used = categories.cache_size_bytes();
+                printf("knowledge cache: %.1f KB used", used / 1024.0);
+                if (knowledge_budget_mb > 0) {
+                    printf(" of %llu MB budget", (unsigned long long) knowledge_budget_mb);
+                } else {
+                    printf(" (unbounded)");
+                }
+                printf("\n");
                 continue;
             }
             if (lower.rfind("/namechat", 0) == 0) {

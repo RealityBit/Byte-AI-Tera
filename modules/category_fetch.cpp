@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <ctime>
 #include <fstream>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -73,9 +75,53 @@ void save_cache(const std::string & path, const json & cache) {
     }
 }
 
+uint64_t now_unix() {
+    return static_cast<uint64_t>(std::time(nullptr));
+}
+
+uint64_t chunks_total_bytes(const json & cache) {
+    uint64_t total = 0;
+    if (cache.contains("chunks")) {
+        for (const auto & [key, entry] : cache["chunks"].items()) {
+            total += entry.value("size", 0ULL);
+        }
+    }
+    return total;
+}
+
+// evicts least-recently-used chunks (oldest last_accessed first) until
+// total_bytes + incoming_size fits within budget_bytes
+void evict_lru(json & cache, uint64_t incoming_size, uint64_t budget_bytes) {
+    if (budget_bytes == 0 || !cache.contains("chunks")) {
+        return; // 0 = unbounded
+    }
+
+    struct entry_ref {
+        std::string key;
+        uint64_t    last_accessed;
+    };
+    std::vector<entry_ref> entries;
+    for (const auto & [key, entry] : cache["chunks"].items()) {
+        entries.push_back({key, entry.value("last_accessed", 0ULL)});
+    }
+    std::sort(entries.begin(), entries.end(), [](const entry_ref & a, const entry_ref & b) {
+        return a.last_accessed < b.last_accessed;
+    });
+
+    uint64_t total = chunks_total_bytes(cache);
+    for (const auto & e : entries) {
+        if (total + incoming_size <= budget_bytes) {
+            break;
+        }
+        total -= cache["chunks"][e.key].value("size", 0ULL);
+        cache["chunks"].erase(e.key);
+    }
+}
+
 } // namespace
 
-category_fetch::category_fetch(std::string cache_path) : cache_path(std::move(cache_path)) {}
+category_fetch::category_fetch(std::string cache_path, uint64_t budget_bytes)
+    : cache_path(std::move(cache_path)), budget_bytes(budget_bytes) {}
 
 std::optional<std::string> category_fetch::best_matching_category(const std::string & query) {
     json cache = load_cache(cache_path);
@@ -136,10 +182,15 @@ std::optional<std::pair<std::string, std::string>> category_fetch::fetch(const s
     }
 
     json cache = load_cache(cache_path);
-    std::string cache_key = "chunk:" + *category;
+    if (!cache.contains("chunks")) {
+        cache["chunks"] = json::object();
+    }
 
-    if (cache.contains(cache_key)) {
-        return std::make_pair(*category, cache[cache_key].get<std::string>());
+    if (cache["chunks"].contains(*category)) {
+        std::string content = cache["chunks"][*category].value("content", "");
+        cache["chunks"][*category]["last_accessed"] = now_unix();
+        save_cache(cache_path, cache);
+        return std::make_pair(*category, content);
     }
 
     auto body = http_get(BASE_URL + *category + "/chunk-1.txt");
@@ -147,8 +198,19 @@ std::optional<std::pair<std::string, std::string>> category_fetch::fetch(const s
         return std::nullopt;
     }
 
-    cache[cache_key] = *body;
+    uint64_t size = body->size();
+    evict_lru(cache, size, budget_bytes);
+
+    cache["chunks"][*category] = {
+        {"content", *body},
+        {"size", size},
+        {"last_accessed", now_unix()},
+    };
     save_cache(cache_path, cache);
 
     return std::make_pair(*category, *body);
+}
+
+uint64_t category_fetch::cache_size_bytes() {
+    return chunks_total_bytes(load_cache(cache_path));
 }

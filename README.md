@@ -108,6 +108,20 @@ Live conditions via wttr.in, defaulting to IP geolocation if no location is name
 Greetings, thanks, and "help" get an instant canned reply with no model generation pass at all, the same
 as math/date-time -- e.g. "hi", "thanks", "help".
 
+#### Dynamically-Loaded Knowledge Base
+A knowledge base distilled from a bigger local model (Qwen2.5 3B via Ollama), hosted as chunked files in
+this repo (`data/knowledge/`) and fetched on demand -- the same pattern as Wikipedia, but curated:
+
+```
+"Tell me about the solar system" → [knowledge: space] → facts pulled from data/knowledge/space/chunk-1.txt
+```
+
+Category matching is keyword-based against `data/knowledge/categories.json`, so adding a new category is
+just adding data + a manifest entry, no code change. The local cache grows dynamically as you ask about
+more topics, bounded by a configurable byte budget (`--knowledge-budget-mb`) so a phone can cap small while
+a MacBook allows more -- once the budget is hit, the least-recently-used chunks are evicted first. Check
+usage with `/knowledge`. Regenerate or extend categories with `scripts/generate_knowledge.py`.
+
 #### Unit Converter
 ```
 "10km in miles" → 10 km = 6.214 miles
@@ -209,6 +223,8 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 | `--train-log` | training corpus file | `wiki-chat-training.txt` |
 | `--memory-db` | cross-session memory database | `wiki-chat-memory.db` |
 | `--report` | scheduled-job report file | `wiki-chat-reports.txt` |
+| `--category-cache` | knowledge-base cache file | `wiki-chat-category-cache.json` |
+| `--knowledge-budget-mb` | local knowledge-base cache size cap (0 = unbounded) | `0` |
 | `--batch "<prompt>"` | run one turn non-interactively and exit (used by `/schedule`) | -- |
 
 ---
@@ -267,6 +283,7 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 /schedule <HH:MM> <prompt>   Schedule a daily automated prompt via cron
 /schedules          List scheduled jobs
 /unschedule <name>  Remove a scheduled job
+/knowledge          Show local knowledge-base cache usage vs. budget
 /bye                Exit (also /quit, /end, /exit)
 ```
 
@@ -294,6 +311,7 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 | Forget / Secret Mode | Working | `/forget <topic>`/`/forget all` deletes from memory; `/secret` suppresses logging |
 | User Name (`/user`) | Working | Folded into the system prompt and the "who am i" quick reply |
 | Scheduled Automations | Working | `/schedule`/`/schedules`/`/unschedule`, real crontab entries, `--batch` mode |
+| Dynamic Knowledge Base | Working | Qwen2.5-3B-distilled, GitHub-hosted chunks, LRU-bounded local cache, `/knowledge` |
 
 ---
 
@@ -387,7 +405,12 @@ Byte-AI-Tera/
 │   ├── quick_response.{h,cpp} # instant canned replies for greetings/acknowledgements
 │   ├── memory_store.{h,cpp}   # SQLite FTS5 cross-session memory, recall, forget
 │   ├── scheduler.{h,cpp}      # local cron-based scheduled automations
+│   ├── category_fetch.{h,cpp} # dynamically-loaded, GitHub-hosted knowledge base
 │   └── training_log.{h,cpp}   # local training corpus collection
+├── data/knowledge/            # the knowledge base itself: categories.json manifest +
+│                               # <category>/chunk-N.txt, distilled from Qwen2.5 3B
+├── scripts/
+│   └── generate_knowledge.py  # (re)generates knowledge-base categories via Ollama
 ├── retrain.sh                 # folds the corpus back into the model via llama-finetune
 ├── CMakeLists.txt             # builds llama-wiki-chat once dropped into llama.cpp/examples/
 └── README.md                  # this file
