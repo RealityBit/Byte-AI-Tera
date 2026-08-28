@@ -1,6 +1,34 @@
 # Byte AI Android port -- work in progress
 
-Started on the `android-port` branch. Not yet functional; this is scaffolding + direction, not a build.
+Started on the `android-port` branch. The scaffold builds to a real debug APK (verified below); the app
+itself is still the stock llama.android sample flow (pick a GGUF, chat) with Byte's system prompt/specs and
+theming layered on -- not yet Byte's actual feature set (memory, tools, etc, see below).
+
+## Building it
+
+Same pattern as the desktop CLI (see the root README's Getting Started): this is a llama.cpp example, so it
+needs to sit inside a llama.cpp checkout to resolve its native build.
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp.git
+cp -r Byte-AI-Tera/android/app-scaffold llama.cpp/examples/byte-android
+cd llama.cpp/examples/byte-android
+echo "sdk.dir=$ANDROID_HOME" > local.properties
+./gradlew assembleDebug
+```
+
+Verified working with: JDK 17 (Gradle 8.14.3 doesn't yet support JDK 26), Android SDK platform 36 +
+build-tools 36.1.0, NDK 30.0.14904198. Two real gotchas hit while getting a clean build:
+- No `sdkmanager` was available to fetch the SDK's own bundled CMake package, so `cmake.dir=<path to a
+  directory containing bin/cmake>` was added to `local.properties` (e.g. `cmake.dir=/opt/homebrew` for a
+  Homebrew CMake install) to point at a system CMake instead.
+- `lib/build.gradle.kts` originally pinned `version = "3.31.6"` in its `externalNativeBuild { cmake {} }`
+  block, which AGP enforces as an exact match -- rejecting a newer system CMake (4.3.2) outright even with
+  `cmake.dir` set. Removed the pin so it just uses whatever `cmake.dir` resolves to.
+
+Output: `app/build/outputs/apk/debug/app-debug.apk` (~110MB debug build, bundling `arm64-v8a` + `x86_64`
+plus every `ggml-cpu-*` microarchitecture variant unstripped -- normal for an unoptimized multi-ABI debug
+build, not release-representative).
 
 ## Base
 
@@ -39,5 +67,6 @@ text color, monospace font).
   - Platform self-detection: bare `uname()` reports "Linux" on Android same as a Linux desktop (Android
     runs the Linux kernel) -- needs something Android-specific (e.g. checking for `/system/build.prop`, or
     just hardcoding it since a dedicated Android build already knows what it is).
-- No Android Studio/emulator is available in the environment this was scaffolded in, so none of this has
-  been built or run yet -- next real step needs an environment that can actually compile and launch it.
+- The APK builds but hasn't been installed/run on a real device or emulator yet (no emulator available in
+  the environment it was built in) -- next real step is side-loading the debug APK onto an actual arm64-v8a
+  device (a Galaxy S26 Ultra is the intended first test device) to confirm it actually launches and chats.
