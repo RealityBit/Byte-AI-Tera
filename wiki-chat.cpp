@@ -35,6 +35,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <poll.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
@@ -611,8 +612,28 @@ int main(int argc, char ** argv) {
         return 0;
     }
 
+    // draws a genuinely blinking "> " prompt by toggling it on/off with poll()
+    // while waiting for input, rather than relying on the ANSI blink attribute
+    // (SGR 5), which most modern terminals ignore or disable by default. freezes
+    // solid the instant input is available so it never fights with typed text
+    auto blink_prompt = [&]() {
+        printf("\r\033[32m> \033[0m");
+        fflush(stdout);
+
+        bool visible = true;
+        while (true) {
+            struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
+            if (poll(&pfd, 1, 500) > 0) {
+                return; // input's ready; the solid prompt is already drawn
+            }
+            visible = !visible;
+            printf(visible ? "\r\033[32m> \033[0m" : "\r   ");
+            fflush(stdout);
+        }
+    };
+
     while (true) {
-        printf("\033[5;32m>\033[0m ");
+        blink_prompt();
         std::string user;
         std::getline(std::cin, user);
 
