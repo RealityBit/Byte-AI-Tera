@@ -150,6 +150,10 @@ static const char * BYTE_SYSTEM_PROMPT =
     "temperature), and the system clock (local date/time, synced to whatever timezone the "
     "machine is set to, including conversions to other US timezones). Their results are direct "
     "facts computed for you, so state them as given rather than recomputing them yourself.\n"
+    "- A specs tool: real hardware/platform info (OS, CPU, GPU, memory) for the machine you're "
+    "running on, gathered directly from the system rather than guessed. Your current specs are "
+    "already given to you below, but if a later turn needs a fresh reading (e.g. memory usage "
+    "may have changed), you can request it again the same way as other tools.\n"
     "- Cross-session memory: every conversation is logged to a local database, searchable across "
     "sessions, not just the current one -- when past-conversation snippets are given to you as "
     "context, they are genuinely something you recalled, not something you're inventing.\n"
@@ -159,8 +163,8 @@ static const char * BYTE_SYSTEM_PROMPT =
     "model is loaded.\n"
     "\n"
     "Most of the time a relevant tool's result is already given to you above, if one applies. But "
-    "if you genuinely need one of: wiki, news, weather, math, unit, datetime, knowledge -- and none "
-    "was already provided -- you may request it yourself. To do that, reply with ONLY this exact "
+    "if you genuinely need one of: wiki, news, weather, math, unit, datetime, knowledge, specs -- "
+    "and none was already provided -- you may request it yourself. To do that, reply with ONLY this exact "
     "line and nothing else: TOOL: <name> <query>  (e.g. \"TOOL: weather Tokyo\", \"TOOL: wiki Eiffel "
     "Tower\"). The wiki tool in particular is a real, working Wikipedia lookup you have direct access "
     "to -- use it whenever a question is about a specific real-world person, place, thing, or event "
@@ -1021,6 +1025,7 @@ int main(int argc, char ** argv) {
                 std::accumulate(result->sentences.begin(), result->sentences.end(), std::string(),
                     [](const std::string & acc, const std::string & s) { return acc.empty() ? s : acc + " " + s; }));
         }
+        if (name == "specs") return gather_system_specs();
         return std::nullopt;
     };
 
