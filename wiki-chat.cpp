@@ -539,7 +539,13 @@ int main(int argc, char ** argv) {
     category_fetch categories(category_cache_path, knowledge_budget_mb * 1024ULL * 1024ULL);
     int64_t session_id = memory.start_session();
 
-    auto generate = [&](const std::string & prompt) {
+    // thrown by generate() when the running conversation has filled the
+    // context window. caught by the caller, which resets the chat (like
+    // /newchat) instead of the old behavior of exit()ing the whole process --
+    // a single long response shouldn't end the entire session
+    struct context_overflow {};
+
+    auto generate = [&](const std::string & prompt, int max_response_tokens) {
         std::string response;
 
         const bool is_first = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) == -1;
@@ -555,8 +561,8 @@ int main(int argc, char ** argv) {
         // a hard cap independent of context size: even with the repetition
         // penalty above, a small model can still get stuck re-deriving the
         // same (sometimes already-correct) answer forever. give up cleanly
-        // rather than run until context overflow
-        const int max_response_tokens = 1024;
+        // rather than run until context overflow. the caller picks the cap --
+        // factual/tool-assisted answers get a tight one, open chat gets more room
         int n_generated = 0;
         while (true) {
             int n_ctx_cur  = llama_n_ctx(ctx);
@@ -564,13 +570,7 @@ int main(int argc, char ** argv) {
             if (n_ctx_used + batch.n_tokens > n_ctx_cur) {
                 printf("\033[0m\n");
                 fprintf(stderr, "context size exceeded\n");
-                // same cleanup order as the interactive loop's normal exit path
-                // below -- exit()ing straight from here used to skip it and crash
-                // ggml-metal's teardown
-                llama_sampler_free(smpl);
-                llama_free(ctx);
-                llama_model_free(model);
-                exit(0);
+                throw context_overflow{};
             }
 
             int ret = llama_decode(ctx, batch);
@@ -831,7 +831,16 @@ int main(int argc, char ** argv) {
         }
 
         std::string prompt(formatted.begin() + prev_len, formatted.begin() + new_len);
-        std::string response = generate(prompt);
+        std::string response;
+        try {
+            response = generate(prompt, 400);
+        } catch (context_overflow &) {
+            fprintf(stderr, "context overflow on a single --batch turn -- try a shorter prompt\n");
+            llama_sampler_free(smpl);
+            llama_free(ctx);
+            llama_model_free(model);
+            return 1;
+        }
         printf("\n");
 
         memory.log_turn(session_id, "user", user);
@@ -1292,6 +1301,10 @@ int main(int argc, char ** argv) {
             continue;
         }
 
+        // tool-assisted turns get a tighter cap -- they're meant to relay a
+        // fact concisely, not write an essay. open-ended chat gets more room
+        int response_cap = 512;
+
         if (is_identity_question(user)) {
             // fall through with no tool lookup; the system prompt already covers this
         } else if (memory_is_requested(user)) {
@@ -1305,6 +1318,7 @@ int main(int argc, char ** argv) {
                 turn_input = "Snippets recalled from past conversations (use these only if relevant to "
                              "the current request; they may be about unrelated topics):\n" + context +
                              "\nUser request: " + user;
+                response_cap = 350;
             }
         } else if (weather_is_requested(user)) {
             auto weather = weather_fetch(user);
@@ -1314,6 +1328,7 @@ int main(int argc, char ** argv) {
                              "data (not something you need to disclaim): " + *weather +
                              ". Report it directly and naturally, with no hedging about data access.\n"
                              "User request: " + user;
+                response_cap = 350;
             }
         } else if (news_is_requested(user)) {
             auto news = news_fetch(user);
@@ -1326,6 +1341,7 @@ int main(int argc, char ** argv) {
                              "know these current headlines, so present this list to them, verbatim titles, "
                              "as your answer):\n" + *news +
                              "\nUser request: " + user;
+                response_cap = 350;
             }
         } else if (categories.is_requested(user)) {
             auto result = categories.fetch(user);
@@ -1334,6 +1350,7 @@ int main(int argc, char ** argv) {
                 turn_input = "Curated knowledge on \"" + result->first + "\" (use this only to fill gaps or "
                              "check facts; otherwise answer from what you already know): " + result->second +
                              "\nUser question: " + user;
+                response_cap = 350;
             }
         } else if (!is_chitchat(user)) {
             auto wiki_result = wiki.learn(user, history);
@@ -1351,6 +1368,7 @@ int main(int argc, char ** argv) {
                              "fill gaps or check current facts your own knowledge might be missing; otherwise "
                              "answer from what you already know): " + context +
                              "\n\nUser question: " + user;
+                response_cap = 350;
             }
         }
 
@@ -1372,7 +1390,18 @@ int main(int argc, char ** argv) {
         std::string prompt(formatted.begin() + prev_len, formatted.begin() + new_len);
 
         printf("\033[33m");
-        std::string response = generate(prompt);
+        std::string response;
+        try {
+            response = generate(prompt, response_cap);
+        } catch (context_overflow &) {
+            printf("\n\033[0m");
+            free(const_cast<char *>(messages.back().content));
+            messages.pop_back();
+            history.pop_back();
+            printf("\033[36m[context full -- starting a fresh chat automatically]\033[0m\n");
+            start_new_chat(chat_name);
+            continue;
+        }
         printf("\n\033[0m");
 
         history.back().bot = response;
@@ -1404,9 +1433,13 @@ int main(int argc, char ** argv) {
         if (new_len >= 0) {
             std::string prompt(formatted.begin() + prev_len, formatted.begin() + new_len);
             printf("\033[36m[memory] saving session summary\033[0m\n\033[33m");
-            std::string summary = generate(prompt);
+            try {
+                std::string summary = generate(prompt, 150);
+                memory.set_session_summary(session_id, summary);
+            } catch (context_overflow &) {
+                // not worth resetting anything for -- we're exiting right after this anyway
+            }
             printf("\n\033[0m");
-            memory.set_session_summary(session_id, summary);
         }
     }
 
