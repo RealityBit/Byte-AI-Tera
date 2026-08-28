@@ -1,6 +1,9 @@
 package com.example.llama
 
+import android.app.ActivityManager
+import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.EditText
@@ -156,7 +159,28 @@ class MainActivity : AppCompatActivity() {
                 userInputEt.hint = "Loading model..."
             }
             engine.loadModel(modelFile.path)
+            Log.i(TAG, "Sending Byte system prompt...")
+            engine.setSystemPrompt(BYTE_SYSTEM_PROMPT + gatherAndroidSpecs())
         }
+
+    /**
+     * Real Android hardware/platform info (device model, Android version, CPU ABI, RAM), gathered
+     * directly from the OS -- mirrors gather_system_specs() in the desktop CLI's wiki-chat.cpp, which
+     * bypasses the model for facts it's been shown to unreliably relay/invent rather than trusting it
+     * to state them faithfully. There's no fastfetch equivalent to shell out to on Android, so this
+     * reads android.os.Build + ActivityManager.MemoryInfo directly instead.
+     */
+    private fun gatherAndroidSpecs(): String {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val memInfo = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        val totalGb = memInfo.totalMem / 1073741824.0
+        val availGb = memInfo.availMem / 1073741824.0
+
+        return "\nplatform: Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})" +
+            "\ndevice: ${Build.MANUFACTURER} ${Build.MODEL}" +
+            "\ncpu abi: ${Build.SUPPORTED_ABIS.joinToString(", ")}" +
+            "\nmemory: %.1f/%.1f GB available/total".format(availGb, totalGb)
+    }
 
     /**
      * Validate and send the user message into [InferenceEngine]
@@ -251,6 +275,18 @@ class MainActivity : AppCompatActivity() {
         private const val BENCH_TOKEN_GENERATION_TOKENS = 128
         private const val BENCH_SEQUENCE = 1
         private const val BENCH_REPETITION = 3
+
+        // Trimmed mobile version of BYTE_SYSTEM_PROMPT from the desktop CLI's wiki-chat.cpp --
+        // no tool-calling protocol here yet, since none of the desktop's live-knowledge/
+        // exact-computation modules have an Android port (see android/README.md). Real device
+        // specs are appended by gatherAndroidSpecs() after this.
+        private const val BYTE_SYSTEM_PROMPT =
+            "You are Byte, an AI assistant (Byte AI, Android). If you are not confident in a " +
+                "factual answer -- a specific name, date, number, or anything you'd be guessing " +
+                "at -- say so plainly rather than stating an uncertain guess as if it were fact. " +
+                "Being wrong with confidence is worse than admitting uncertainty. Answer naturally " +
+                "and concisely. Here is your current device's platform/hardware info -- state it " +
+                "directly if asked, don't guess or omit parts of it:"
     }
 }
 
