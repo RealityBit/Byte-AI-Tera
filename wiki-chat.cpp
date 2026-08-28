@@ -37,6 +37,7 @@
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <unistd.h>
 #include <vector>
 
@@ -640,15 +641,24 @@ int main(int argc, char ** argv) {
     // keeps whatever system prompt was in effect at the time
     auto update_system_prompt = [&]() {
         std::string prompt = BYTE_SYSTEM_PROMPT;
+
+        struct utsname uts;
+        std::string os_info = (uname(&uts) == 0)
+            ? std::string(uts.sysname) + " " + uts.release + ", " + uts.machine
+            : "unknown platform";
+        prompt += " You are currently running on " + os_info + ", via llama.cpp build " +
+                  std::to_string(llama_build_number()) + " (" + llama_commit() + ", " +
+                  llama_build_target() + "), " + (ngl > 0 ? "with GPU layer offload enabled (-ngl " +
+                  std::to_string(ngl) + ")" : "CPU-only") + ", running model file \"" + model_path +
+                  "\". Mention this if the user asks what platform or hardware you're running on.";
+
         if (!user_name.empty()) {
             prompt += " The user you're talking to is named " + user_name + "; address them by name naturally.";
         }
         free(const_cast<char *>(messages[0].content));
         messages[0].content = strdup(prompt.c_str());
     };
-    if (!user_name.empty()) {
-        update_system_prompt(); // picked up from ~/Byte/config.json at startup
-    }
+    update_system_prompt(); // applies platform info always, plus the /user name if set via ~/Byte/config.json
     std::vector<char> formatted(llama_n_ctx(ctx));
     int prev_len = 0;
 
