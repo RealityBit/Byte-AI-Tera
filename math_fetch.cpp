@@ -17,17 +17,24 @@ std::string to_lower(std::string s) {
 
 const std::map<std::string, char> & word_ops() {
     static const std::map<std::string, char> ops = {
-        {"plus", '+'}, {"added to", '+'},
-        {"minus", '-'}, {"subtracted from", '-'},
-        {"times", '*'}, {"multiplied by", '*'},
-        {"divided by", '/'}, {"over", '/'},
+        {"plus", '+'}, {"added to", '+'}, {"add", '+'},
+        {"minus", '-'}, {"subtracted from", '-'}, {"subtract", '-'},
+        {"times", '*'}, {"multiplied by", '*'}, {"multiply", '*'},
+        {"divided by", '/'}, {"over", '/'}, {"divide", '/'},
+        {"modulo", '%'}, {"mod", '%'},
     };
     return ops;
 }
 
 // matches a plain symbolic expression: "2+3", "10 * 5.5"
 const std::regex & symbolic_re() {
-    static const std::regex re(R"((-?\d+(?:\.\d+)?)\s*([+\-*/^])\s*(-?\d+(?:\.\d+)?))");
+    static const std::regex re(R"((-?\d+(?:\.\d+)?)\s*([+\-*/^%])\s*(-?\d+(?:\.\d+)?))");
+    return re;
+}
+
+// unary forms: "5 squared", "3 cubed"
+const std::regex & unary_re() {
+    static const std::regex re(R"((-?\d+(?:\.\d+)?)\s+(squared|cubed))");
     return re;
 }
 
@@ -50,6 +57,7 @@ std::optional<double> apply_op(double a, char op, double b) {
         case '*': return a * b;
         case '/': return b != 0 ? std::optional<double>(a / b) : std::nullopt;
         case '^': return std::pow(a, b);
+        case '%': return b != 0 ? std::optional<double>(std::fmod(a, b)) : std::nullopt;
         default:  return std::nullopt;
     }
 }
@@ -57,7 +65,7 @@ std::optional<double> apply_op(double a, char op, double b) {
 } // namespace
 
 bool math_is_requested(const std::string & query) {
-    if (std::regex_search(query, symbolic_re())) {
+    if (std::regex_search(query, symbolic_re()) || std::regex_search(query, unary_re())) {
         return true;
     }
 
@@ -77,6 +85,12 @@ bool math_is_requested(const std::string & query) {
 
 std::optional<std::string> math_fetch(const std::string & query) {
     std::smatch m;
+    if (std::regex_search(query, m, unary_re())) {
+        double a = std::stod(m[1]);
+        double exponent = m[2] == "squared" ? 2 : 3;
+        double result = std::pow(a, exponent);
+        return m[1].str() + " " + m[2].str() + " = " + format_number(result);
+    }
     if (std::regex_search(query, m, symbolic_re())) {
         double a  = std::stod(m[1]);
         char   op = m[2].str()[0];

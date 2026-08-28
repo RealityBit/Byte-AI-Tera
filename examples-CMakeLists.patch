@@ -1,0 +1,12 @@
+diff --git a/examples/CMakeLists.txt b/examples/CMakeLists.txt
+index 39f802d..ca19335 100644
+--- a/examples/CMakeLists.txt
++++ b/examples/CMakeLists.txt
+@@ -31,6 +31,7 @@ else()
+     add_subdirectory(simple-chat)
+     add_subdirectory(speculative)
+     add_subdirectory(speculative-simple)
++    add_subdirectory(wiki-chat)
+     add_subdirectory(gen-docs)
+     add_subdirectory(training)
+     add_subdirectory(diffusion)

@@ -98,6 +98,16 @@ Every Wikipedia/news fact Byte fetches is appended to a local corpus (`wiki-chat
 nothing is logged twice for the same cached topic. `retrain.sh` wraps llama.cpp's fine-tuning support to fold
 that corpus back into the model between sessions.
 
+#### Weather
+```
+"Weather in Tokyo" → Weather in Tokyo: 17 C, Light misty fog, humidity 77%, wind 9 km/h
+```
+Live conditions via wttr.in, defaulting to IP geolocation if no location is named.
+
+#### Instant Quick Replies
+Greetings, thanks, and "help" get an instant canned reply with no model generation pass at all, the same
+as math/date-time -- e.g. "hi", "thanks", "help".
+
 ---
 
 ## Getting Started
@@ -112,7 +122,9 @@ mkdir -p llama.cpp/examples/wiki-chat
 cp Byte-AI-Tera/*.cpp Byte-AI-Tera/*.h Byte-AI-Tera/CMakeLists.txt Byte-AI-Tera/retrain.sh llama.cpp/examples/wiki-chat/
 ```
 
-Add `wiki-chat` as a subdirectory in `llama.cpp/examples/CMakeLists.txt`:
+Add `wiki-chat` as a subdirectory in `llama.cpp/examples/CMakeLists.txt` -- this is the **only** line
+touched anywhere in the llama.cpp tree itself (see [Integration Footprint](#integration-footprint) below);
+`examples-CMakeLists.patch` in this repo is that exact one-line diff if you'd rather apply it directly:
 
 ```cmake
 add_subdirectory(wiki-chat)
@@ -203,6 +215,30 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 | Local Training Log | Working | Deduped corpus of everything Byte has fetched |
 | Fine-tuning fetched data back in | Experimental | Blocked on an upstream llama.cpp WIP bug, see Known Issues |
 | GPU acceleration | Working | Metal on Apple Silicon, verified full layer offload |
+| Weather | Working | wttr.in, location extraction or IP geolocation |
+| Instant Quick Replies | Working | Greetings/thanks/help, model bypassed |
+
+---
+
+## Integration Footprint
+
+Byte AI 4.0 lives entirely in its own `examples/wiki-chat/` directory once dropped into a llama.cpp
+checkout. The **only** change made anywhere else in the llama.cpp tree is one line in
+`examples/CMakeLists.txt` registering that new subdirectory -- no existing llama.cpp source file is
+modified. That exact diff is checked in here as `examples-CMakeLists.patch`:
+
+```diff
+--- a/examples/CMakeLists.txt
++++ b/examples/CMakeLists.txt
+@@ -31,6 +31,7 @@ else()
+     add_subdirectory(simple-chat)
+     add_subdirectory(speculative)
+     add_subdirectory(speculative-simple)
++    add_subdirectory(wiki-chat)
+     add_subdirectory(gen-docs)
+     add_subdirectory(training)
+     add_subdirectory(diffusion)
+```
 
 ---
 

@@ -9,7 +9,9 @@
 #include "datetime_fetch.h"
 #include "math_fetch.h"
 #include "news_fetch.h"
+#include "quick_response.h"
 #include "training_log.h"
+#include "weather_fetch.h"
 #include "wiki_fetch.h"
 
 #include <algorithm>
@@ -79,13 +81,13 @@ static bool is_identity_question(const std::string & user) {
 
 static const char * BYTE_SYSTEM_PROMPT =
     "You are Byte, an AI assistant (Byte AI 4.0 \"Tera\"). You have access to live "
-    "knowledge tools: a Wikipedia lookup, a HackerNews/Dev.to news feed, the system clock "
-    "(local date/time, synced to whatever timezone the machine is set to, including "
-    "conversions to other US timezones), and a calculator. Wikipedia and news results are "
-    "supplementary context, filling gaps in or checking facts against what you already know, "
-    "never overriding your own judgment. The date/time and math results are direct facts "
-    "computed for you, so state them as given rather than recomputing them yourself. Answer "
-    "naturally and concisely.";
+    "knowledge tools: a Wikipedia lookup, a HackerNews/Dev.to news feed, live weather data, "
+    "the system clock (local date/time, synced to whatever timezone the machine is set to, "
+    "including conversions to other US timezones), and a calculator. Wikipedia, news, and "
+    "weather results are supplementary context, filling gaps in or checking facts against "
+    "what you already know, never overriding your own judgment. The date/time and math "
+    "results are direct facts computed for you, so state them as given rather than "
+    "recomputing them yourself. Answer naturally and concisely.";
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
@@ -283,8 +285,24 @@ int main(int argc, char ** argv) {
             continue;
         }
 
+        // instant canned replies for greetings/acknowledgements, same reasoning as
+        // math/datetime: no need to spend a generation pass on "hi" or "thanks"
+        if (auto quick = quick_response(user)) {
+            answer_directly(user, *quick);
+            continue;
+        }
+
         if (is_identity_question(user)) {
             // fall through with no tool lookup; the system prompt already covers this
+        } else if (weather_is_requested(user)) {
+            auto weather = weather_fetch(user);
+            if (weather) {
+                printf("\033[36m[weather]\033[0m\n");
+                turn_input = "A weather API was just called for this request and returned real, current "
+                             "data (not something you need to disclaim): " + *weather +
+                             ". Report it directly and naturally, with no hedging about data access.\n"
+                             "User request: " + user;
+            }
         } else if (news_is_requested(user)) {
             auto news = news_fetch(user);
             if (news) {
