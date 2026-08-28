@@ -167,6 +167,14 @@ static const char * BYTE_SYSTEM_PROMPT =
     "to you; request it instead. Only do this when "
     "you truly cannot answer without it; never combine it with other text, and never do this for "
     "something you already know or that has already been supplied to you.\n"
+    "\n"
+    "If you are not confident in a factual answer -- a specific name, date, number, fact about a "
+    "real person/place/thing/event, or anything you'd be guessing at -- look it up with the "
+    "appropriate tool before answering, rather than stating an uncertain guess as if it were fact. "
+    "Being wrong with confidence is worse than taking one extra step to check. This applies "
+    "especially to wiki for real-world entities, knowledge for general facts, and news/weather for "
+    "anything current. Only skip the lookup when you are genuinely certain, or when a tool's result "
+    "was already given to you above.\n"
     "Answer naturally and concisely.";
 
 // strips anything that could escape the ~/Byte directory (path separators,
@@ -810,6 +818,18 @@ int main(int argc, char ** argv) {
         size_t sp = rest.find_first_not_of(' ');
         rest = (sp == std::string::npos) ? "" : rest.substr(sp);
 
+        // only take the first line as the query, even if the model kept
+        // generating past the "TOOL: ..." line instead of stopping there as
+        // instructed -- otherwise trailing rambling becomes part of the query
+        // (observed: "TOOL: wiki Tesla\n<paragraph>" sent the whole paragraph
+        // to the Wikipedia lookup as if it were the search term)
+        size_t nl = rest.find('\n');
+        if (nl != std::string::npos) {
+            rest = rest.substr(0, nl);
+        }
+        size_t end = rest.find_last_not_of(" \t\r");
+        rest = (end == std::string::npos) ? "" : rest.substr(0, end + 1);
+
         size_t sep = rest.find(' ');
         if (sep == std::string::npos) {
             return std::nullopt;
@@ -825,7 +845,11 @@ int main(int argc, char ** argv) {
         if (name == "math")     return math_fetch(query);
         if (name == "unit")     return unit_fetch(query);
         if (name == "datetime") return datetime_fetch(query);
-        if (name == "weather")  return weather_fetch(query);
+        // weather_fetch extracts the location via a "weather in/for/at <place>"
+        // regex, so a bare model-provided location string like "Tokyo" needs
+        // wrapping first -- otherwise it silently falls back to IP-based
+        // auto-location (observed: asked for Tokyo, got weather for Calhoun)
+        if (name == "weather")  return weather_fetch("weather in " + query);
         if (name == "news")     return news_fetch(query);
         if (name == "knowledge") {
             auto result = categories.fetch(query);
