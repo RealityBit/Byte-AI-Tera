@@ -15,15 +15,20 @@ such restriction.
 
 `design-reference/ByteAI-3.0-ui-reference.html` is Byte 3.0 "Mega"'s original browser UI (pulled from
 [Byte_AI@v3.1](https://github.com/RetroGigabyte/Byte_AI/blob/v3.1/ByteAI.html)), kept here purely as a
-design reference for the Android UI -- not code to port directly (it's vanilla JS/HTML, the Android app
-will be Kotlin/Compose). The look to carry forward: black background, terminal-green (`#00ff00`) accents,
-monospace font -- matches Byte's CLI identity in `Byte-AI-Tera` itself.
+design reference for the Android UI -- not code to port directly (it's vanilla JS/HTML; the Android app
+uses classic View-based layouts/XML resources, not Compose). The look carried forward so far: black
+background, terminal-green (`#00ff00`) accents, monospace font -- matching Byte's CLI identity in
+`Byte-AI-Tera` itself. Applied to `colors.xml`, `themes.xml`, `strings.xml` (app name -> "Byte AI"), the
+message bubble drawables, and `activity_main.xml`/the two message item layouts (background, FAB tint,
+text color, monospace font).
 
 ## What still needs real work (not started)
 
 - `app-scaffold/lib`'s JNI layer needs the model wired to Byte's actual GGUF (currently generic
   llama.android sample wiring).
-- A Compose UI matching the terminal-green aesthetic above, replacing llama.android's default sample UI.
+- The Kotlin package name / applicationId is still the generic `com.example.llama` /
+  `com.arm.aichat` from the sample -- not renamed yet since that touches more files and couldn't be
+  verified without a build.
 - Everything in `Byte-AI-Tera`'s desktop modules that assumes desktop POSIX paths or shells out to a CLI
   tool needs an Android-native equivalent, built separately rather than assumed to just recompile:
   - `modules/scheduler.cpp` (crontab) -> `WorkManager`/`AlarmManager`

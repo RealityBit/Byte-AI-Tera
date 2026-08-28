@@ -2,8 +2,12 @@
 <resources>
 
     <style name="Base.Theme.AiChatSample" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+        <item name="colorPrimary">@color/byte_green</item>
+        <item name="colorOnPrimary">@color/byte_black</item>
+        <item name="colorSecondary">@color/byte_green_bright</item>
+        <item name="android:windowBackground">@color/byte_black</item>
+        <item name="android:textColorPrimary">@color/byte_green</item>
+        <item name="android:textColorHint">@color/byte_gray_text</item>
     </style>
 
     <style name="Theme.AiChatSample" parent="Base.Theme.AiChatSample" />

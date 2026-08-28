@@ -12,5 +12,6 @@
         android:layout_height="wrap_content"
         android:background="@drawable/bg_user_message"
         android:padding="12dp"
-        android:textColor="@android:color/white" />
+        android:fontFamily="monospace"
+        android:textColor="@color/byte_green_bright" />
 </LinearLayout>
