@@ -624,10 +624,15 @@ int main(int argc, char ** argv) {
         while (true) {
             struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
             if (poll(&pfd, 1, 500) > 0) {
-                return; // input's ready; the solid prompt is already drawn
+                // always end on a freshly-drawn solid prompt, regardless of
+                // which toggle state was last on screen, so the cursor lands
+                // in the right column before input gets echoed
+                printf("\r\033[32m> \033[0m");
+                fflush(stdout);
+                return;
             }
             visible = !visible;
-            printf(visible ? "\r\033[32m> \033[0m" : "\r   ");
+            printf(visible ? "\r\033[32m> \033[0m" : "\r  "); // "  " matches "> "'s 2-column width exactly
             fflush(stdout);
         }
     };
