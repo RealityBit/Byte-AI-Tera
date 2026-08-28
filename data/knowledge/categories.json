@@ -19,6 +19,42 @@
     {
       "name": "geography",
       "keywords": ["geography", "country", "capital", "mountain", "ocean", "continent", "river", "desert", "island"]
+    },
+    {
+      "name": "mathematics",
+      "keywords": ["math", "mathematics", "algebra", "geometry", "calculus", "equation", "number", "prime", "theorem", "statistics"]
+    },
+    {
+      "name": "literature",
+      "keywords": ["literature", "novel", "poetry", "poem", "author", "writer", "fiction", "shakespeare", "book"]
+    },
+    {
+      "name": "music",
+      "keywords": ["music", "song", "instrument", "orchestra", "guitar", "piano", "composer", "genre", "rhythm", "melody"]
+    },
+    {
+      "name": "art",
+      "keywords": ["art", "painting", "sculpture", "artist", "museum", "renaissance", "canvas", "gallery"]
+    },
+    {
+      "name": "sports",
+      "keywords": ["sport", "sports", "football", "soccer", "basketball", "baseball", "olympics", "athlete", "tennis"]
+    },
+    {
+      "name": "medicine",
+      "keywords": ["medicine", "medical", "disease", "vaccine", "doctor", "hospital", "anatomy", "virus", "bacteria", "health"]
+    },
+    {
+      "name": "psychology",
+      "keywords": ["psychology", "brain", "memory", "emotion", "behavior", "cognitive", "mental", "therapy"]
+    },
+    {
+      "name": "economics",
+      "keywords": ["economics", "economy", "market", "inflation", "trade", "currency", "stock", "gdp", "finance"]
+    },
+    {
+      "name": "food",
+      "keywords": ["food", "cooking", "cuisine", "recipe", "nutrition", "diet", "ingredient", "chef"]
     }
   ]
 }

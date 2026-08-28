@@ -174,6 +174,20 @@ static std::optional<std::string> config_path() {
     return dir + "/config.json";
 }
 
+// builds the default path for one of Byte's data files under ~/Byte/, so
+// cache/memory/training/report files all live in one place instead of
+// scattered across whatever directory the binary happened to be launched
+// from. falls back to a plain relative filename if $HOME isn't set
+static std::string default_byte_path(const std::string & filename) {
+    const char * home = getenv("HOME");
+    if (!home) {
+        return filename;
+    }
+    std::string dir = std::string(home) + "/Byte";
+    mkdir(dir.c_str(), 0755);
+    return dir + "/" + filename;
+}
+
 static std::string load_config_user_name() {
     auto path = config_path();
     if (!path) {
@@ -311,12 +325,12 @@ int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
     std::string model_path;
-    std::string cache_path = "wiki-chat-cache.json";
-    std::string train_log_path = "wiki-chat-training.txt";
-    std::string memory_db_path = "wiki-chat-memory.db";
-    std::string category_cache_path = "wiki-chat-category-cache.json";
+    std::string cache_path = default_byte_path("wiki-chat-cache.json");
+    std::string train_log_path = default_byte_path("wiki-chat-training.txt");
+    std::string memory_db_path = default_byte_path("wiki-chat-memory.db");
+    std::string category_cache_path = default_byte_path("wiki-chat-category-cache.json");
     uint64_t knowledge_budget_mb = 0; // 0 = unbounded
-    std::string report_path = "wiki-chat-reports.txt";
+    std::string report_path = default_byte_path("wiki-chat-reports.txt");
     std::optional<std::string> batch_prompt;
     int ngl   = 99;
     int n_ctx = 4096;
