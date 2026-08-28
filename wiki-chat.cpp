@@ -58,7 +58,7 @@ static const std::vector<std::string> & known_commands() {
         "/bye", "/quit", "/end", "/exit", "/version", "/ver", "/model", "/user", "/history",
         "/knowledge", "/namechat", "/save", "/load", "/forget", "/delchat", "/newchat",
         "/secret", "/schedule", "/schedules", "/unschedule", "/wipecfg", "/downloadmodel",
-        "/listmods", "/switchmod",
+        "/listmods", "/switchmod", "/help",
     };
     return cmds;
 }
@@ -840,6 +840,51 @@ int main(int argc, char ** argv) {
             if (lower == "/version" || lower == "/ver") {
                 printf("%s", BYTE_LOGO_BANNER);
                 printf("Byte AI 4.0 \"Tera\"\n");
+                continue;
+            }
+            if (lower == "/help") {
+                printf(
+                    "Byte AI 4.0 \"Tera\" -- commands:\n"
+                    "\n"
+                    "  Session\n"
+                    "    /bye, /quit, /end, /exit   exit\n"
+                    "    /version, /ver              logo + version\n"
+                    "    /model                      llama.cpp build + loaded model path\n"
+                    "    /help                        this list\n"
+                    "\n"
+                    "  Identity & config\n"
+                    "    /user <name>                tell Byte your name (persisted)\n"
+                    "    /wipecfg                     reset persisted settings\n"
+                    "\n"
+                    "  Conversations\n"
+                    "    /namechat <name>             start a new, named chat\n"
+                    "    /newchat [name]               start a fresh chat\n"
+                    "    /save [name]                  save the current chat\n"
+                    "    /load <name>                  resume a saved chat\n"
+                    "    /delchat <name>               delete a saved chat\n"
+                    "    /history                      list saved chats\n"
+                    "    /secret                       toggle: stop logging this session\n"
+                    "\n"
+                    "  Memory\n"
+                    "    /forget <topic>               forget matching past turns\n"
+                    "    /forget all                   wipe all cross-session memory\n"
+                    "\n"
+                    "  Knowledge base\n"
+                    "    /knowledge                    show local knowledge-cache usage\n"
+                    "\n"
+                    "  Models\n"
+                    "    /listmods                     list local + Ollama models\n"
+                    "    /switchmod <name>              hot-swap the loaded model\n"
+                    "    /downloadmodel                 fetch Phi-3.5-mini from Byte-AI-Models\n"
+                    "\n"
+                    "  Automation\n"
+                    "    /schedule <HH:MM> <prompt>    schedule a daily prompt\n"
+                    "    /schedules                    list scheduled jobs\n"
+                    "    /unschedule <name>             remove a scheduled job\n"
+                    "\n"
+                    "  Otherwise, just talk to Byte -- it knows Wikipedia, live news/weather, math,\n"
+                    "  unit conversion, and the current date/time on its own.\n"
+                );
                 continue;
             }
             if (lower == "/model") {
