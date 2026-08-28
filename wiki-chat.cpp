@@ -155,6 +155,13 @@ static const char * BYTE_SYSTEM_PROMPT =
     "you can mention them if relevant): saving/loading/naming conversations, forgetting specific "
     "remembered topics, scheduling recurring automated prompts, and switching which underlying "
     "model is loaded.\n"
+    "\n"
+    "Most of the time a relevant tool's result is already given to you above, if one applies. But "
+    "if you genuinely need one of: wiki, news, weather, math, unit, datetime, knowledge -- and none "
+    "was already provided -- you may request it yourself. To do that, reply with ONLY this exact "
+    "line and nothing else: TOOL: <name> <query>  (e.g. \"TOOL: weather Tokyo\"). Only do this when "
+    "you truly cannot answer without it; never combine it with other text, and never do this for "
+    "something you already know or that has already been supplied to you.\n"
     "Answer naturally and concisely.";
 
 // strips anything that could escape the ~/Byte directory (path separators,
@@ -781,6 +788,56 @@ int main(int argc, char ** argv) {
         return true;
     };
 
+    // parses a model-initiated tool request, only when the model's ENTIRE
+    // trimmed response is exactly "TOOL: <name> <query>" -- requiring the
+    // whole response to match avoids false positives from the phrase turning
+    // up inside ordinary prose
+    auto parse_tool_request = [](const std::string & response) -> std::optional<std::pair<std::string, std::string>> {
+        std::string trimmed = response;
+        size_t a = trimmed.find_first_not_of(" \t\r\n");
+        size_t b = trimmed.find_last_not_of(" \t\r\n");
+        trimmed = (a == std::string::npos) ? "" : trimmed.substr(a, b - a + 1);
+
+        if (trimmed.rfind("TOOL:", 0) != 0) {
+            return std::nullopt;
+        }
+        std::string rest = trimmed.substr(5);
+        size_t sp = rest.find_first_not_of(' ');
+        rest = (sp == std::string::npos) ? "" : rest.substr(sp);
+
+        size_t sep = rest.find(' ');
+        if (sep == std::string::npos) {
+            return std::nullopt;
+        }
+        return std::make_pair(rest.substr(0, sep), rest.substr(sep + 1));
+    };
+
+    // executes a model-requested tool by name, reusing the same modules the
+    // keyword router uses -- this is the "add alongside, don't replace"
+    // version: the model can only reach for a tool the keyword router didn't
+    // already fire for this turn
+    auto execute_tool_by_name = [&](const std::string & name, const std::string & query) -> std::optional<std::string> {
+        if (name == "math")     return math_fetch(query);
+        if (name == "unit")     return unit_fetch(query);
+        if (name == "datetime") return datetime_fetch(query);
+        if (name == "weather")  return weather_fetch(query);
+        if (name == "news")     return news_fetch(query);
+        if (name == "knowledge") {
+            auto result = categories.fetch(query);
+            return result ? std::optional<std::string>(result->second) : std::nullopt;
+        }
+        if (name == "wiki") {
+            auto result = wiki.learn(query, history);
+            if (!result) {
+                return std::nullopt;
+            }
+            return wiki_fetch::format_response(
+                std::accumulate(result->sentences.begin(), result->sentences.end(), std::string(),
+                    [](const std::string & acc, const std::string & s) { return acc.empty() ? s : acc + " " + s; }));
+        }
+        return std::nullopt;
+    };
+
     // --batch mode: a single non-interactive turn, meant to be re-invoked by
     // cron via /schedule. routes through the same tool detectors as the
     // interactive loop, generates one reply, appends it to --report, and exits
@@ -1403,6 +1460,57 @@ int main(int argc, char ** argv) {
             continue;
         }
         printf("\n\033[0m");
+
+        // model-initiated tool calling: only reachable when the keyword router
+        // didn't already fire a tool this turn (response_cap == 512 is the
+        // "nothing matched" default) -- added alongside keyword routing, not
+        // in place of it, so already-reliable cases are untouched
+        if (response_cap == 512) {
+            if (auto tool_req = parse_tool_request(response)) {
+                // commit the TOOL: request itself as this turn's assistant
+                // message, matching what's already decoded into the KV cache
+                messages.push_back({"assistant", strdup(response.c_str())});
+                prev_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), false, nullptr, 0);
+                if (prev_len < 0) {
+                    fprintf(stderr, "failed to apply the chat template\n");
+                    return 1;
+                }
+
+                auto tool_result = execute_tool_by_name(tool_req->first, tool_req->second);
+                if (!tool_result) {
+                    printf("\033[36m[tool: %s -- no result]\033[0m\n", tool_req->first.c_str());
+                    response = "I tried to look that up but couldn't get a result.";
+                } else {
+                    printf("\033[36m[tool: %s]\033[0m\n", tool_req->first.c_str());
+                    std::string followup = "Tool result for \"" + tool_req->second + "\": " + *tool_result +
+                                            "\nNow answer the user's original question using this.";
+                    messages.push_back({"user", strdup(followup.c_str())});
+                    int new_len2 = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+                    if (new_len2 > (int) formatted.size()) {
+                        formatted.resize(new_len2);
+                        new_len2 = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+                    }
+                    if (new_len2 < 0) {
+                        fprintf(stderr, "failed to apply the chat template\n");
+                        return 1;
+                    }
+                    std::string prompt2(formatted.begin() + prev_len, formatted.begin() + new_len2);
+                    printf("\033[33m");
+                    try {
+                        response = generate(prompt2, 350);
+                    } catch (context_overflow &) {
+                        printf("\n\033[0m");
+                        free(const_cast<char *>(messages.back().content));
+                        messages.pop_back();
+                        history.pop_back();
+                        printf("\033[36m[context full -- starting a fresh chat automatically]\033[0m\n");
+                        start_new_chat(chat_name);
+                        continue;
+                    }
+                    printf("\n\033[0m");
+                }
+            }
+        }
 
         history.back().bot = response;
         if (!secret_mode) {
