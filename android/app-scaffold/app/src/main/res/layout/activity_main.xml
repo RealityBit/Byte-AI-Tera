@@ -70,6 +70,21 @@
                 android:hint="Please first pick a GGUF model file to import." />
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/download_fab"
+                android:enabled="true"
+                style="@style/Widget.Material3.FloatingActionButton.Small.Secondary"
+                app:backgroundTint="@color/byte_black"
+                app:tint="@color/byte_green"
+                app:borderWidth="0dp"
+                app:elevation="0dp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:contentDescription="Download Byte's model from GitHub"
+                android:src="@drawable/outline_download_24" />
+
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
                 android:id="@+id/fab"
                 android:enabled="true"
                 style="@style/Widget.Material3.FloatingActionButton.Primary"
@@ -80,6 +95,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_margin="12dp"
+                android:contentDescription="Pick a local GGUF file"
                 android:src="@drawable/outline_folder_open_24" />
 
         </LinearLayout>

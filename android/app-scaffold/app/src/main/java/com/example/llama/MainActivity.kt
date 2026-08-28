@@ -26,9 +26,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.RandomAccessFile
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
 import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
@@ -38,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var messagesRv: RecyclerView
     private lateinit var userInputEt: EditText
     private lateinit var userActionFab: FloatingActionButton
+    private lateinit var downloadFab: FloatingActionButton
 
     // Arm AI Chat inference engine
     private lateinit var engine: InferenceEngine
@@ -63,6 +69,7 @@ class MainActivity : AppCompatActivity() {
         messagesRv.adapter = messageAdapter
         userInputEt = findViewById(R.id.user_input)
         userActionFab = findViewById(R.id.fab)
+        downloadFab = findViewById(R.id.download_fab)
 
         // Arm AI Chat initialization
         lifecycleScope.launch(Dispatchers.Default) {
@@ -78,6 +85,14 @@ class MainActivity : AppCompatActivity() {
                 // Otherwise, prompt user to select a GGUF metadata on the device
                 getContent.launch(arrayOf("*/*"))
             }
+        }
+
+        // Downloads Byte's own model straight from Byte-AI-Models on GitHub, as an
+        // alternative to picking a local file
+        downloadFab.setOnClickListener {
+            downloadFab.isEnabled = false
+            userActionFab.isEnabled = false
+            lifecycleScope.launch(Dispatchers.IO) { downloadByteModel() }
         }
     }
 
@@ -124,6 +139,105 @@ class MainActivity : AppCompatActivity() {
                         userActionFab.isEnabled = true
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Downloads Byte's own model (phi3.5-mini, MIT licensed) from the Byte-AI-Models manifest on
+     * GitHub -- chunked (GitHub blocks single files over 100MB), resumable, and sha256-verified,
+     * mirroring model_fetch.cpp's /downloadmodel logic in the desktop CLI.
+     */
+    private suspend fun downloadByteModel() = withContext(Dispatchers.IO) {
+        try {
+            withContext(Dispatchers.Main) { userInputEt.hint = "Fetching manifest..." }
+
+            val manifestUrl = URL(MANIFEST_URL)
+            val manifest = JSONObject((manifestUrl.openConnection() as HttpURLConnection).run {
+                connectTimeout = 15000
+                readTimeout = 15000
+                inputStream.bufferedReader().use { it.readText() }.also { disconnect() }
+            })
+
+            val chunks = manifest.getJSONArray("chunks")
+            val expectedSha = manifest.getString("sha256")
+            val baseUrl = MANIFEST_URL.substringBeforeLast('/') + "/"
+            val outputFile = File(ensureModelsDirectory(), "phi3.5-mini.gguf")
+
+            // resume support: skip chunks whose bytes are already fully present at the right
+            // offset, same as model_fetch.cpp's resume logic
+            var offset = if (outputFile.exists()) outputFile.length() else 0L
+            var resumeIndex = 0
+            var probeOffset = 0L
+            for (i in 0 until chunks.length()) {
+                val size = chunks.getJSONObject(i).getLong("size")
+                if (offset >= probeOffset + size) {
+                    probeOffset += size
+                    resumeIndex++
+                } else {
+                    break
+                }
+            }
+            offset = probeOffset
+
+            RandomAccessFile(outputFile, "rw").use { raf ->
+                raf.setLength(offset)
+                raf.seek(offset)
+                for (i in resumeIndex until chunks.length()) {
+                    val name = chunks.getJSONObject(i).getString("name")
+                    withContext(Dispatchers.Main) {
+                        userInputEt.hint = "Downloading model [${i + 1}/${chunks.length()}]..."
+                    }
+                    val conn = URL(baseUrl + name).openConnection() as HttpURLConnection
+                    conn.connectTimeout = 15000
+                    conn.readTimeout = 60000
+                    conn.inputStream.use { input ->
+                        val buf = ByteArray(65536)
+                        var n: Int
+                        while (input.read(buf).also { n = it } >= 0) {
+                            raf.write(buf, 0, n)
+                        }
+                    }
+                    conn.disconnect()
+                }
+            }
+
+            withContext(Dispatchers.Main) { userInputEt.hint = "Verifying checksum..." }
+            val actualSha = MessageDigest.getInstance("SHA-256").let { digest ->
+                outputFile.inputStream().use { input ->
+                    val buf = ByteArray(1 shl 20)
+                    var n: Int
+                    while (input.read(buf).also { n = it } >= 0) {
+                        digest.update(buf, 0, n)
+                    }
+                }
+                digest.digest().joinToString("") { "%02x".format(it) }
+            }
+
+            if (actualSha != expectedSha) {
+                withContext(Dispatchers.Main) {
+                    userInputEt.hint = "Checksum mismatch -- tap download again to retry."
+                    downloadFab.isEnabled = true
+                }
+                return@withContext
+            }
+
+            loadModel(outputFile.name, outputFile)
+            withContext(Dispatchers.Main) {
+                isModelReady = true
+                ggufTv.text = "Loaded Byte's model from GitHub: ${outputFile.name}"
+                userInputEt.hint = "Type and send a message!"
+                userInputEt.isEnabled = true
+                userActionFab.setImageResource(R.drawable.outline_send_24)
+                userActionFab.isEnabled = true
+                downloadFab.visibility = android.view.View.GONE
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Model download failed", e)
+            withContext(Dispatchers.Main) {
+                userInputEt.hint = "Download failed -- tap download again to retry."
+                downloadFab.isEnabled = true
+                userActionFab.isEnabled = true
             }
         }
     }
@@ -270,6 +384,9 @@ class MainActivity : AppCompatActivity() {
 
         private const val DIRECTORY_MODELS = "models"
         private const val FILE_EXTENSION_GGUF = ".gguf"
+
+        private const val MANIFEST_URL =
+            "https://raw.githubusercontent.com/RetroGigabyte/Byte-AI-Models/main/manifest.json"
 
         private const val BENCH_PROMPT_PROCESSING_TOKENS = 512
         private const val BENCH_TOKEN_GENERATION_TOKENS = 128

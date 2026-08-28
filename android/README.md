@@ -50,6 +50,17 @@ background, terminal-green (`#00ff00`) accents, monospace font -- matching Byte'
 message bubble drawables, and `activity_main.xml`/the two message item layouts (background, FAB tint,
 text color, monospace font).
 
+## App icon and model download
+
+The launcher icon is now `Byte_AI.png` (adaptive icon: `ic_launcher_background.xml` is solid
+`byte_black`, `ic_launcher_foreground.xml` insets the logo bitmap into the adaptive-icon safe zone).
+The pre-model-load screen now has two buttons: the original folder icon (pick a local GGUF via the
+system file picker) and a new download icon that fetches Byte's own model directly from
+[Byte-AI-Models](https://github.com/RetroGigabyte/Byte-AI-Models) on GitHub -- same chunked/resumable/
+sha256-verified approach as the desktop CLI's `/downloadmodel` (`modules/model_fetch.cpp`), reimplemented
+in Kotlin with `HttpURLConnection` + `RandomAccessFile` rather than adding a new HTTP dependency. Requires
+the `INTERNET` permission, now declared in `AndroidManifest.xml`.
+
 ## What still needs real work (not started)
 
 - `app-scaffold/lib`'s JNI layer needs the model wired to Byte's actual GGUF (currently generic
