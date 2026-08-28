@@ -15,23 +15,19 @@
         android:layout_marginEnd="4dp"
         tools:context=".MainActivity">
 
-        <ScrollView
+        <TextView
+            android:id="@+id/gguf"
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:fadeScrollbars="false">
-
-            <TextView
-                android:id="@+id/gguf"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:padding="16dp"
-                android:fontFamily="monospace"
-                android:textColor="@color/byte_gray_text"
-                android:text="Selected GGUF model's metadata will show here."
-                style="@style/TextAppearance.MaterialComponents.Body2" />
-
-        </ScrollView>
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="10dp"
+            android:fontFamily="monospace"
+            android:textSize="12sp"
+            android:maxLines="3"
+            android:ellipsize="end"
+            android:textColor="@color/byte_green_bright"
+            android:text="No model loaded -- pick a local GGUF or download Byte's from GitHub."
+            style="@style/TextAppearance.MaterialComponents.Body2" />
 
         <com.google.android.material.divider.MaterialDivider
             android:layout_width="match_parent"
@@ -43,7 +39,9 @@
             android:id="@+id/messages"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="4"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:paddingVertical="8dp"
             android:fadeScrollbars="false"
             android:scrollbars="vertical"
             app:reverseLayout="true"

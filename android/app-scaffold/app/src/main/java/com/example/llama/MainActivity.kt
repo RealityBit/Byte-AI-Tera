@@ -225,7 +225,7 @@ class MainActivity : AppCompatActivity() {
             loadModel(outputFile.name, outputFile)
             withContext(Dispatchers.Main) {
                 isModelReady = true
-                ggufTv.text = "Loaded Byte's model from GitHub: ${outputFile.name}"
+                ggufTv.text = "Byte AI -- ${outputFile.name} (downloaded from GitHub)"
                 userInputEt.hint = "Type and send a message!"
                 userInputEt.isEnabled = true
                 userActionFab.setImageResource(R.drawable.outline_send_24)
