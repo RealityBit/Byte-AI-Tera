@@ -612,7 +612,7 @@ int main(int argc, char ** argv) {
     }
 
     while (true) {
-        printf("\033[32m> \033[0m");
+        printf("\033[5;32m> \033[0m");
         std::string user;
         std::getline(std::cin, user);
 
