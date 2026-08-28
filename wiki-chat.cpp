@@ -39,6 +39,28 @@
 #include <unistd.h>
 #include <vector>
 
+static int levenshtein(const std::string & a, const std::string & b) {
+    std::vector<std::vector<int>> d(a.size() + 1, std::vector<int>(b.size() + 1));
+    for (size_t i = 0; i <= a.size(); i++) d[i][0] = (int) i;
+    for (size_t j = 0; j <= b.size(); j++) d[0][j] = (int) j;
+    for (size_t i = 1; i <= a.size(); i++) {
+        for (size_t j = 1; j <= b.size(); j++) {
+            int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+            d[i][j] = std::min({d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost});
+        }
+    }
+    return d[a.size()][b.size()];
+}
+
+static const std::vector<std::string> & known_commands() {
+    static const std::vector<std::string> cmds = {
+        "/bye", "/quit", "/end", "/exit", "/version", "/ver", "/user", "/history",
+        "/knowledge", "/namechat", "/save", "/load", "/forget", "/delchat", "/newchat",
+        "/secret", "/schedule", "/schedules", "/unschedule",
+    };
+    return cmds;
+}
+
 // short conversational turns that are not knowledge lookups, so a Wikipedia
 // fetch should not be attempted even if the word happens to have an article
 // (e.g. plain "hello" would otherwise pull up the etymology of the greeting)
@@ -814,6 +836,32 @@ int main(int argc, char ** argv) {
                     printf("removed scheduled job %s\n", name.c_str());
                 } else {
                     printf("no scheduled job named %s\n", name.c_str());
+                }
+                continue;
+            }
+
+            // none of the commands above matched -- if this looks like a slash
+            // command at all, say so instead of silently falling through to
+            // plain chat (a typo like "/verson" used to just get answered as
+            // if it were a regular message, with no hint anything went wrong)
+            if (!lower.empty() && lower[0] == '/') {
+                size_t sp = lower.find(' ');
+                std::string typed = sp == std::string::npos ? lower : lower.substr(0, sp);
+
+                std::string closest;
+                int best_dist = INT_MAX;
+                for (const auto & cmd : known_commands()) {
+                    int dist = levenshtein(typed, cmd);
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        closest   = cmd;
+                    }
+                }
+
+                if (best_dist <= 2) {
+                    printf("unknown command %s -- did you mean %s?\n", typed.c_str(), closest.c_str());
+                } else {
+                    printf("unknown command %s\n", typed.c_str());
                 }
                 continue;
             }
