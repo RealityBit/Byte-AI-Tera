@@ -1,0 +1,24 @@
+{
+  "categories": [
+    {
+      "name": "science",
+      "keywords": ["science", "physics", "chemistry", "biology", "atom", "molecule", "gravity", "evolution", "cell", "energy"]
+    },
+    {
+      "name": "space",
+      "keywords": ["space", "planet", "galaxy", "star", "astronomy", "universe", "nasa", "rocket", "moon", "orbit", "solar system"]
+    },
+    {
+      "name": "history",
+      "keywords": ["history", "ancient", "empire", "war", "revolution", "civilization", "medieval", "dynasty", "historical"]
+    },
+    {
+      "name": "technology",
+      "keywords": ["technology", "computer", "software", "internet", "robot", "artificial intelligence", "programming", "algorithm"]
+    },
+    {
+      "name": "geography",
+      "keywords": ["geography", "country", "capital", "mountain", "ocean", "continent", "river", "desert", "island"]
+    }
+  ]
+}

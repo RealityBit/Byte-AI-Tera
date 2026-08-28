@@ -6,6 +6,7 @@
 
 #include "llama.h"
 #include "build-info.h"
+#include "modules/category_fetch.h"
 #include "modules/datetime_fetch.h"
 #include "modules/math_fetch.h"
 #include "modules/memory_store.h"
@@ -114,9 +115,10 @@ static const char * BYTE_SYSTEM_PROMPT =
     "You are Byte, an AI assistant (Byte AI 4.0 \"Tera\"). You have access to live "
     "knowledge tools: a Wikipedia lookup, a HackerNews/Dev.to news feed, live weather data, "
     "the system clock (local date/time, synced to whatever timezone the machine is set to, "
-    "including conversions to other US timezones), a calculator, and a unit converter (length, "
-    "weight, volume, speed, temperature). Wikipedia, news, and "
-    "weather results are supplementary context, filling gaps in or checking facts against "
+    "including conversions to other US timezones), a calculator, a unit converter (length, "
+    "weight, volume, speed, temperature), and a curated knowledge base on select topics. "
+    "Wikipedia, news, weather, and curated-knowledge "
+    "results are supplementary context, filling gaps in or checking facts against "
     "what you already know, never overriding your own judgment. The date/time and math "
     "results are direct facts computed for you, so state them as given rather than "
     "recomputing them yourself. Answer naturally and concisely.";
@@ -243,6 +245,7 @@ int main(int argc, char ** argv) {
     std::string cache_path = "wiki-chat-cache.json";
     std::string train_log_path = "wiki-chat-training.txt";
     std::string memory_db_path = "wiki-chat-memory.db";
+    std::string category_cache_path = "wiki-chat-category-cache.json";
     std::string report_path = "wiki-chat-reports.txt";
     std::optional<std::string> batch_prompt;
     int ngl   = 99;
@@ -262,6 +265,8 @@ int main(int argc, char ** argv) {
                 train_log_path = argv[++i];
             } else if (strcmp(argv[i], "--memory-db") == 0 && i + 1 < argc) {
                 memory_db_path = argv[++i];
+            } else if (strcmp(argv[i], "--category-cache") == 0 && i + 1 < argc) {
+                category_cache_path = argv[++i];
             } else if (strcmp(argv[i], "--report") == 0 && i + 1 < argc) {
                 report_path = argv[++i];
             } else if (strcmp(argv[i], "--batch") == 0 && i + 1 < argc) {
@@ -336,6 +341,7 @@ int main(int argc, char ** argv) {
 
     wiki_fetch wiki(cache_path);
     memory_store memory(memory_db_path);
+    category_fetch categories(category_cache_path);
     int64_t session_id = memory.start_session();
 
     auto generate = [&](const std::string & prompt) {
@@ -528,6 +534,12 @@ int main(int argc, char ** argv) {
             if (auto news = news_fetch(user)) {
                 turn_input = "Live news feed just fetched (present this list verbatim as your answer):\n" + *news +
                              "\nUser request: " + user;
+            }
+        } else if (categories.is_requested(user)) {
+            if (auto result = categories.fetch(user)) {
+                turn_input = "Curated knowledge on \"" + result->first + "\" (use this only to fill gaps or "
+                             "check facts; otherwise answer from what you already know): " + result->second +
+                             "\nUser question: " + user;
             }
         } else if (auto wiki_result = wiki.learn(user, {})) {
             std::string context = wiki_fetch::format_response(
@@ -858,6 +870,14 @@ int main(int argc, char ** argv) {
                              "know these current headlines, so present this list to them, verbatim titles, "
                              "as your answer):\n" + *news +
                              "\nUser request: " + user;
+            }
+        } else if (categories.is_requested(user)) {
+            auto result = categories.fetch(user);
+            if (result) {
+                printf("\033[36m[knowledge: %s]\033[0m\n", result->first.c_str());
+                turn_input = "Curated knowledge on \"" + result->first + "\" (use this only to fill gaps or "
+                             "check facts; otherwise answer from what you already know): " + result->second +
+                             "\nUser question: " + user;
             }
         } else if (!is_chitchat(user)) {
             auto wiki_result = wiki.learn(user, history);

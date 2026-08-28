@@ -13,6 +13,7 @@ add_executable(${TARGET} wiki-chat.cpp
                           modules/unit_fetch.cpp
                           modules/memory_store.cpp
                           modules/scheduler.cpp
+                          modules/category_fetch.cpp
                           modules/training_log.cpp)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 install(TARGETS ${TARGET} RUNTIME)
