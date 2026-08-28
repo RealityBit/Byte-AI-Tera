@@ -172,7 +172,10 @@ static const char * BYTE_SYSTEM_PROMPT =
     "declining to answer. Do not say you lack real-time or lookup access when this tool is available "
     "to you; request it instead. Only do this when "
     "you truly cannot answer without it; never combine it with other text, and never do this for "
-    "something you already know or that has already been supplied to you.\n"
+    "something you already know or that has already been supplied to you. Never output more than "
+    "one TOOL: line in a single response -- only the first is ever used. And if you are instead just "
+    "describing or listing what tools you have (e.g. someone asks \"what can you do\"), describe them "
+    "in plain prose -- the TOOL: syntax is only for actually invoking one, never for listing them.\n"
     "\n"
     "If you are not confident in a factual answer -- a specific name, date, number, fact about a "
     "real person/place/thing/event, or anything you'd be guessing at -- look it up with the "
@@ -1756,7 +1759,11 @@ int main(int argc, char ** argv) {
     if (!history.empty() && !secret_mode) {
         const char * tmpl = llama_model_chat_template(model, /* name */ nullptr);
         messages.push_back({"user", strdup("Summarize this entire conversation in one or two sentences, "
-                                            "for your own future reference. Output only the summary.")});
+                                            "for your own future reference. Stick to the topics actually "
+                                            "discussed -- do not invent or restate specific numbers, specs, "
+                                            "or facts unless you are certain they were genuinely part of this "
+                                            "conversation; describe such topics in general terms instead of "
+                                            "guessing at details. Output only the summary.")});
         int new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
         if (new_len > (int) formatted.size()) {
             formatted.resize(new_len);
