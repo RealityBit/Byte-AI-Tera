@@ -59,7 +59,7 @@ static const std::vector<std::string> & known_commands() {
         "/bye", "/quit", "/end", "/exit", "/version", "/ver", "/model", "/user", "/history",
         "/knowledge", "/namechat", "/save", "/load", "/forget", "/delchat", "/newchat",
         "/secret", "/schedule", "/schedules", "/unschedule", "/wipecfg", "/downloadmodel",
-        "/listmods", "/switchmod", "/help",
+        "/listmods", "/switchmod", "/modeset", "/help",
     };
     return cmds;
 }
@@ -238,15 +238,54 @@ static std::string load_config_user_name() {
     }
 }
 
-static void save_config_user_name(const std::string & name) {
+// merges one field into config.json rather than overwriting the whole file --
+// the earlier single-field version of this clobbered other saved settings
+// (e.g. saving a name would have wiped out a previously-saved default model)
+static void save_config_field(const std::string & key, const std::string & value) {
     auto path = config_path();
     if (!path) {
         return;
     }
+    nlohmann::json j = nlohmann::json::object();
+    std::ifstream in(*path);
+    if (in.is_open()) {
+        try {
+            in >> j;
+        } catch (const std::exception &) {
+            j = nlohmann::json::object();
+        }
+    }
+    j[key] = value;
     std::ofstream out(*path);
     if (out.is_open()) {
-        out << nlohmann::json{{"user_name", name}}.dump(2);
+        out << j.dump(2);
     }
+}
+
+static void save_config_user_name(const std::string & name) {
+    save_config_field("user_name", name);
+}
+
+static std::string load_config_default_model() {
+    auto path = config_path();
+    if (!path) {
+        return "";
+    }
+    std::ifstream in(*path);
+    if (!in.is_open()) {
+        return "";
+    }
+    try {
+        nlohmann::json j;
+        in >> j;
+        return j.value("default_model", "");
+    } catch (const std::exception &) {
+        return "";
+    }
+}
+
+static void save_config_default_model(const std::string & name) {
+    save_config_field("default_model", name);
 }
 
 static bool wipe_config() {
@@ -441,6 +480,21 @@ static std::optional<std::string> resolve_ollama_model(const std::string & tag_i
     return std::nullopt;
 }
 
+// resolves a name typed at /switchmod, /modeset, or --model-name into an
+// actual file path: tries it as a literal path, then ~/Byte/models/<name>
+// (with and without .gguf), then falls back to an Ollama tag
+static std::optional<std::string> resolve_model_name(const std::string & name) {
+    std::string dir = default_byte_path("models");
+    std::vector<std::string> candidates = {name, dir + "/" + name, dir + "/" + name + ".gguf"};
+    for (const auto & c : candidates) {
+        struct stat st;
+        if (stat(c.c_str(), &st) == 0) {
+            return c;
+        }
+    }
+    return resolve_ollama_model(name);
+}
+
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
     printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [--cache path.json] [--train-log path.txt] [--memory-db path.db] [--report path.txt] [--batch \"prompt\"] [--knowledge-budget-mb N]\n", argv[0]);
@@ -491,6 +545,16 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "error: %s\n", e.what());
             print_usage(argc, argv);
             return 1;
+        }
+    }
+    if (model_path.empty()) {
+        // no -m given -- fall back to whatever /modeset <name> -p last saved
+        std::string default_name = load_config_default_model();
+        if (!default_name.empty()) {
+            if (auto resolved = resolve_model_name(default_name)) {
+                model_path = *resolved;
+                fprintf(stderr, "using default model \"%s\" -> %s\n", default_name.c_str(), model_path.c_str());
+            }
         }
     }
     if (model_path.empty()) {
@@ -1117,31 +1181,59 @@ int main(int argc, char ** argv) {
                     continue;
                 }
 
-                std::string dir = default_byte_path("models");
-                std::vector<std::string> candidates = {name, dir + "/" + name, dir + "/" + name + ".gguf"};
-                std::string resolved_path;
-                for (const auto & c : candidates) {
-                    struct stat st;
-                    if (stat(c.c_str(), &st) == 0) {
-                        resolved_path = c;
-                        break;
-                    }
-                }
-                if (resolved_path.empty()) {
-                    if (auto ollama_path = resolve_ollama_model(name)) {
-                        resolved_path = *ollama_path;
-                    }
-                }
-
-                if (resolved_path.empty()) {
+                auto resolved = resolve_model_name(name);
+                if (!resolved) {
                     printf("no model found matching \"%s\" -- see /listmods\n", name.c_str());
                 } else {
-                    printf("switching to %s ...\n", resolved_path.c_str());
-                    if (switch_model(resolved_path)) {
+                    printf("switching to %s ...\n", resolved->c_str());
+                    if (switch_model(*resolved)) {
                         printf("now using %s (conversation reset -- different model, different context)\n", model_path.c_str());
                     } else {
-                        printf("failed to load %s -- staying on the previous model\n", resolved_path.c_str());
+                        printf("failed to load %s -- staying on the previous model\n", resolved->c_str());
                     }
+                }
+                continue;
+            }
+            if (lower.rfind("/modeset", 0) == 0) {
+                std::string rest = user.size() > 8 ? user.substr(8) : "";
+                size_t a = rest.find_first_not_of(' ');
+                rest = (a == std::string::npos) ? "" : rest.substr(a);
+
+                bool persist = false;
+                size_t flag = rest.rfind(" -p");
+                if (flag != std::string::npos && flag + 3 == rest.size()) {
+                    persist = true;
+                    rest = rest.substr(0, flag);
+                } else if (rest == "-p") {
+                    persist = true;
+                    rest.clear();
+                }
+
+                std::string name = rest;
+                size_t end = name.find_last_not_of(' ');
+                name = (end == std::string::npos) ? "" : name.substr(0, end + 1);
+
+                if (name.empty()) {
+                    printf("usage: /modeset <name-or-path> [-p]  (-p also persists this as the default for future launches)\n");
+                    continue;
+                }
+
+                auto resolved = resolve_model_name(name);
+                if (!resolved) {
+                    printf("no model found matching \"%s\" -- see /listmods\n", name.c_str());
+                    continue;
+                }
+
+                printf("switching to %s ...\n", resolved->c_str());
+                if (!switch_model(*resolved)) {
+                    printf("failed to load %s -- staying on the previous model\n", resolved->c_str());
+                    continue;
+                }
+                printf("now using %s (conversation reset -- different model, different context)\n", model_path.c_str());
+
+                if (persist) {
+                    save_config_default_model(name);
+                    printf("saved \"%s\" as the default model -- future launches without -m will use it\n", name.c_str());
                 }
                 continue;
             }
