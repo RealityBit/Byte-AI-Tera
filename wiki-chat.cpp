@@ -317,6 +317,100 @@ static std::vector<std::string> list_saved_chats() {
     return names;
 }
 
+// lists "name:tag" for every model Ollama has already pulled, by walking its
+// manifest directory directly (no dependency on the ollama daemon running)
+static std::vector<std::string> list_ollama_models() {
+    std::vector<std::string> out;
+    const char * home = getenv("HOME");
+    if (!home) {
+        return out;
+    }
+
+    std::string base = std::string(home) + "/.ollama/models/manifests/registry.ollama.ai";
+    DIR * ns_dir = opendir(base.c_str());
+    if (!ns_dir) {
+        return out;
+    }
+    while (dirent * ns_entry = readdir(ns_dir)) {
+        std::string ns = ns_entry->d_name;
+        if (ns == "." || ns == "..") continue;
+
+        std::string ns_path = base + "/" + ns;
+        DIR * name_dir = opendir(ns_path.c_str());
+        if (!name_dir) continue;
+        while (dirent * name_entry = readdir(name_dir)) {
+            std::string name = name_entry->d_name;
+            if (name == "." || name == "..") continue;
+
+            std::string name_path = ns_path + "/" + name;
+            DIR * tag_dir = opendir(name_path.c_str());
+            if (!tag_dir) continue;
+            while (dirent * tag_entry = readdir(tag_dir)) {
+                std::string tag = tag_entry->d_name;
+                if (tag == "." || tag == "..") continue;
+                out.push_back(name + ":" + tag);
+            }
+            closedir(tag_dir);
+        }
+        closedir(name_dir);
+    }
+    closedir(ns_dir);
+
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// resolves an Ollama model tag ("qwen2.5:3b", or "phi3.5" for :latest) to the
+// actual GGUF blob Ollama already downloaded, without needing the ollama
+// daemon or a re-download -- reads the manifest the same way `ollama list`
+// would, and follows its "model" layer digest to the content-addressed blob
+static std::optional<std::string> resolve_ollama_model(const std::string & tag_in) {
+    const char * home = getenv("HOME");
+    if (!home) {
+        return std::nullopt;
+    }
+
+    std::string name = tag_in, tag = "latest";
+    size_t colon = tag_in.find(':');
+    if (colon != std::string::npos) {
+        name = tag_in.substr(0, colon);
+        tag  = tag_in.substr(colon + 1);
+    }
+
+    std::string manifest_path = std::string(home) + "/.ollama/models/manifests/registry.ollama.ai/library/" + name + "/" + tag;
+    std::ifstream in(manifest_path);
+    if (!in.is_open()) {
+        return std::nullopt;
+    }
+
+    nlohmann::json j;
+    try {
+        in >> j;
+    } catch (const std::exception &) {
+        return std::nullopt;
+    }
+
+    if (!j.contains("layers")) {
+        return std::nullopt;
+    }
+    for (const auto & layer : j["layers"]) {
+        if (layer.value("mediaType", "") != "application/vnd.ollama.image.model") {
+            continue;
+        }
+        std::string digest = layer.value("digest", "");
+        size_t sep = digest.find(':');
+        if (sep == std::string::npos) {
+            return std::nullopt;
+        }
+        std::string blob_path = std::string(home) + "/.ollama/models/blobs/sha256-" + digest.substr(sep + 1);
+        struct stat st;
+        if (stat(blob_path.c_str(), &st) == 0) {
+            return blob_path;
+        }
+    }
+    return std::nullopt;
+}
+
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
     printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [--cache path.json] [--train-log path.txt] [--memory-db path.db] [--report path.txt] [--batch \"prompt\"] [--knowledge-budget-mb N]\n", argv[0]);
@@ -820,6 +914,14 @@ int main(int argc, char ** argv) {
                 if (!any) {
                     printf("no models in ~/Byte/models -- try /downloadmodel\n");
                 }
+
+                auto ollama_models = list_ollama_models();
+                if (!ollama_models.empty()) {
+                    printf("ollama:\n");
+                    for (const auto & tag : ollama_models) {
+                        printf("  %s\n", tag.c_str());
+                    }
+                }
                 continue;
             }
             if (lower.rfind("/switchmod", 0) == 0) {
@@ -840,6 +942,11 @@ int main(int argc, char ** argv) {
                     if (stat(c.c_str(), &st) == 0) {
                         resolved_path = c;
                         break;
+                    }
+                }
+                if (resolved_path.empty()) {
+                    if (auto ollama_path = resolve_ollama_model(name)) {
+                        resolved_path = *ollama_path;
                     }
                 }
 
