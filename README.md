@@ -273,6 +273,8 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 /version           Show the full-color ASCII-art logo and Byte AI version
 /model             Show the llama.cpp build and loaded model path
 /wipecfg           Delete ~/Byte/config.json and reset persisted settings (currently /user's name)
+/downloadmodel     Download and reassemble a bigger local model (Phi-3.5-mini, MIT)
+                   from Byte-AI-Models, chunk by chunk, checksum-verified
 /user <name>        Tell Byte your name; it addresses you by it going forward
 /namechat <name>    Start a completely new, named chat (clears context/KV cache)
 /save [name]        Save the conversation to ~/Byte/<name>.Byte_Mem
