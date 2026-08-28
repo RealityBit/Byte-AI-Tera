@@ -1,9 +1,10 @@
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(SQLite3 REQUIRED)
 
 set(TARGET llama-wiki-chat)
 add_executable(${TARGET} wiki-chat.cpp wiki_fetch.cpp news_fetch.cpp datetime_fetch.cpp math_fetch.cpp
-                          weather_fetch.cpp quick_response.cpp training_log.cpp)
+                          weather_fetch.cpp quick_response.cpp unit_fetch.cpp memory_store.cpp training_log.cpp)
 install(TARGETS ${TARGET} RUNTIME)
-target_link_libraries(${TARGET} PRIVATE llama llama-common-base CURL::libcurl nlohmann_json::nlohmann_json ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PRIVATE llama llama-common-base CURL::libcurl nlohmann_json::nlohmann_json SQLite3::SQLite3 ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

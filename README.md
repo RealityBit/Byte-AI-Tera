@@ -108,6 +108,46 @@ Live conditions via wttr.in, defaulting to IP geolocation if no location is name
 Greetings, thanks, and "help" get an instant canned reply with no model generation pass at all, the same
 as math/date-time -- e.g. "hi", "thanks", "help".
 
+#### Unit Converter
+```
+"10km in miles" → 10 km = 6.214 miles
+"100F to celsius" → 100 Fahrenheit = 37.78 Celsius
+"5kg in lbs" → 5 kg = 11.02 lbs
+```
+Length, weight, volume, speed, and temperature, computed exactly in C++ and answered directly, the
+same as math.
+
+#### Cross-Session Memory & Recall
+Every turn is logged to a local SQLite FTS5 database (`wiki-chat-memory.db`), across every session, not
+just the current one:
+
+```
+Session 1: "My favorite programming language is Rust"
+[new process, no shared history]
+Session 2: "Do you remember my favorite language?" → "Your favorite programming language is Rust."
+```
+
+Byte detects recall phrasing ("remember", "recall", "we talked about", ...) and full-text searches every
+past turn for relevant snippets, injected as supplementary context. At exit, one last generation pass
+summarizes the session for future reference. Inspired by
+[hermes-agent](https://github.com/NousResearch/hermes-agent)'s FTS5 session search + LLM summarization for
+cross-session recall.
+
+#### Save / Load / Manage Conversations
+```
+/namechat project-x     Name the current chat (a later bare /save reuses this)
+/save [name]             Save the conversation to ~/Byte/<name>.Byte_Mem
+/load <name>             Resume a saved conversation -- actually decoded back into
+                          the model's context, not just replayed as text
+/delchat <name>          Delete a saved chat file
+/newchat [name]           Start fresh: clears context, KV cache, and starts a new
+                          memory session, optionally naming the new chat
+/forget <topic>          Delete every past turn (any session) matching a topic
+/forget all               Wipe all cross-session memory
+/secret                   Toggle: while on, nothing is logged to memory or the
+                          training corpus for the rest of the session
+```
+
 ---
 
 ## Getting Started
@@ -152,6 +192,7 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 | `-ngl` | GPU layers to offload | 99 |
 | `--cache` | Wikipedia cache file | `wiki-chat-cache.json` |
 | `--train-log` | training corpus file | `wiki-chat-training.txt` |
+| `--memory-db` | cross-session memory database | `wiki-chat-memory.db` |
 
 ---
 
@@ -195,8 +236,16 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 
 ### Session Commands
 ```
-/version   Show Byte AI version, llama.cpp build, and loaded model
-/bye       Exit (also /quit, /end, /exit)
+/version           Show Byte AI version, llama.cpp build, and loaded model
+/namechat <name>    Name the current chat for later bare /save
+/save [name]        Save the conversation to ~/Byte/<name>.Byte_Mem
+/load <name>        Resume a saved conversation
+/delchat <name>     Delete a saved chat
+/newchat [name]     Start a fresh conversation (clears context/KV cache)
+/forget <topic>     Delete matching turns from cross-session memory
+/forget all         Wipe all cross-session memory
+/secret             Toggle: stop logging to memory/training for this session
+/bye                Exit (also /quit, /end, /exit)
 ```
 
 ---
@@ -217,6 +266,10 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 | GPU acceleration | Working | Metal on Apple Silicon, verified full layer offload |
 | Weather | Working | wttr.in, location extraction or IP geolocation |
 | Instant Quick Replies | Working | Greetings/thanks/help, model bypassed |
+| Unit Converter | Working | Length/weight/volume/speed/temperature, model bypassed |
+| Cross-Session Memory | Working | SQLite FTS5, recall across separate processes, session summaries |
+| Save/Load/Manage Chats | Working | `/save`, `/load` (resumes in actual model context), `/delchat`, `/newchat`, `/namechat` |
+| Forget / Secret Mode | Working | `/forget <topic>`/`/forget all` deletes from memory; `/secret` suppresses logging |
 
 ---
 
@@ -288,9 +341,9 @@ against an F32 Llama 3.2 1B model.
 - **Language:** C++17
 - **Inference:** [llama.cpp](https://github.com/ggml-org/llama.cpp) / ggml, GPU-accelerated via Metal/CUDA/etc.
   depending on platform
-- **APIs:** Wikipedia REST API, HackerNews Firebase API, Dev.to API
+- **APIs:** Wikipedia REST API, HackerNews Firebase API, Dev.to API, wttr.in
 - **HTTP/JSON:** libcurl, nlohmann::json
-- **Storage:** flat JSON cache + plain-text training corpus on disk
+- **Storage:** flat JSON cache + plain-text training corpus + SQLite FTS5 (cross-session memory) on disk
 
 ---
 
@@ -304,6 +357,10 @@ Byte-AI-Tera/
 ├── news_fetch.{h,cpp}     # HackerNews + Dev.to
 ├── datetime_fetch.{h,cpp} # system clock, timezone conversion
 ├── math_fetch.{h,cpp}     # exact arithmetic
+├── unit_fetch.{h,cpp}     # length/weight/volume/speed/temperature conversion
+├── weather_fetch.{h,cpp}  # wttr.in current conditions
+├── quick_response.{h,cpp} # instant canned replies for greetings/acknowledgements
+├── memory_store.{h,cpp}   # SQLite FTS5 cross-session memory, recall, forget
 ├── training_log.{h,cpp}   # local training corpus collection
 ├── retrain.sh             # folds the corpus back into the model via llama-finetune
 ├── CMakeLists.txt         # builds llama-wiki-chat once dropped into llama.cpp/examples/
@@ -367,11 +424,16 @@ MIT License - feel free to use, modify, and distribute.
 - **Wikipedia REST API** - Knowledge base
 - **HackerNews Firebase API** - Tech news
 - **Dev.to API** - Developer articles
+- **wttr.in** - Weather data
 
 ### Technologies
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) / ggml - local LLM inference
-- libcurl, nlohmann::json
+- libcurl, nlohmann::json, SQLite3 (FTS5)
 - No external dependencies beyond the above
+
+### Inspiration
+- Cross-session memory/recall design inspired by [hermes-agent](https://github.com/NousResearch/hermes-agent)'s
+  FTS5 session search + LLM summarization for cross-session recall (MIT licensed)
 
 ---
 

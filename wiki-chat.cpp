@@ -8,22 +8,28 @@
 #include "build-info.h"
 #include "datetime_fetch.h"
 #include "math_fetch.h"
+#include "memory_store.h"
 #include "news_fetch.h"
 #include "quick_response.h"
 #include "training_log.h"
+#include "unit_fetch.h"
 #include "weather_fetch.h"
 #include "wiki_fetch.h"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <clocale>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <numeric>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
 
 // short conversational turns that are not knowledge lookups, so a Wikipedia
@@ -79,19 +85,122 @@ static bool is_identity_question(const std::string & user) {
     return false;
 }
 
+// phrases that ask Byte to recall something from a past session, not just
+// the current conversation -- inspired by hermes-agent's cross-session FTS5
+// recall (https://github.com/NousResearch/hermes-agent)
+static bool memory_is_requested(const std::string & user) {
+    static const std::vector<std::string> patterns = {
+        "remember", "recall", "we talked about", "you mentioned",
+        "earlier you said", "last time", "before you said", "did i tell you",
+    };
+
+    std::string lower = user;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+
+    for (const auto & p : patterns) {
+        if (lower.find(p) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static const char * BYTE_SYSTEM_PROMPT =
     "You are Byte, an AI assistant (Byte AI 4.0 \"Tera\"). You have access to live "
     "knowledge tools: a Wikipedia lookup, a HackerNews/Dev.to news feed, live weather data, "
     "the system clock (local date/time, synced to whatever timezone the machine is set to, "
-    "including conversions to other US timezones), and a calculator. Wikipedia, news, and "
+    "including conversions to other US timezones), a calculator, and a unit converter (length, "
+    "weight, volume, speed, temperature). Wikipedia, news, and "
     "weather results are supplementary context, filling gaps in or checking facts against "
     "what you already know, never overriding your own judgment. The date/time and math "
     "results are direct facts computed for you, so state them as given rather than "
     "recomputing them yourself. Answer naturally and concisely.";
 
+// strips anything that could escape the ~/Byte directory (path separators,
+// leading dots) so /save can't be used to write outside it
+static std::string sanitize_filename(const std::string & name) {
+    std::string out;
+    for (char c : name) {
+        if (c == '/' || c == '\\' || c == '\0') {
+            continue;
+        }
+        out += c;
+    }
+    while (!out.empty() && out.front() == '.') {
+        out.erase(out.begin());
+    }
+    return out;
+}
+
+// saves the current conversation to ~/Byte/<name>.Byte_Mem as JSON
+static bool save_chat(const std::string & name, const std::vector<wiki_turn> & history) {
+    std::string clean = sanitize_filename(name);
+    if (clean.empty()) {
+        return false;
+    }
+
+    const char * home = getenv("HOME");
+    if (!home) {
+        return false;
+    }
+
+    std::string dir = std::string(home) + "/Byte";
+    mkdir(dir.c_str(), 0755);
+
+    nlohmann::json j;
+    j["version"] = "Byte AI 4.0 \"Tera\"";
+    j["turns"]   = nlohmann::json::array();
+    for (const auto & turn : history) {
+        j["turns"].push_back({{"user", turn.user}, {"bot", turn.bot}});
+    }
+
+    std::ofstream out(dir + "/" + clean + ".Byte_Mem");
+    if (!out.is_open()) {
+        return false;
+    }
+    out << j.dump(2);
+    return true;
+}
+
+// loads a conversation previously written by save_chat, or nullopt if the
+// file doesn't exist / doesn't parse
+static std::optional<std::vector<wiki_turn>> load_chat(const std::string & name) {
+    std::string clean = sanitize_filename(name);
+    if (clean.empty()) {
+        return std::nullopt;
+    }
+
+    const char * home = getenv("HOME");
+    if (!home) {
+        return std::nullopt;
+    }
+
+    std::ifstream in(std::string(home) + "/Byte/" + clean + ".Byte_Mem");
+    if (!in.is_open()) {
+        return std::nullopt;
+    }
+
+    nlohmann::json j;
+    try {
+        in >> j;
+    } catch (const std::exception &) {
+        return std::nullopt;
+    }
+
+    if (!j.contains("turns") || !j["turns"].is_array()) {
+        return std::nullopt;
+    }
+
+    std::vector<wiki_turn> turns;
+    for (const auto & t : j["turns"]) {
+        turns.push_back({t.value("user", ""), t.value("bot", "")});
+    }
+    return turns;
+}
+
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [--cache path.json] [--train-log path.txt]\n", argv[0]);
+    printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [--cache path.json] [--train-log path.txt] [--memory-db path.db]\n", argv[0]);
     printf("\n");
 }
 
@@ -101,6 +210,7 @@ int main(int argc, char ** argv) {
     std::string model_path;
     std::string cache_path = "wiki-chat-cache.json";
     std::string train_log_path = "wiki-chat-training.txt";
+    std::string memory_db_path = "wiki-chat-memory.db";
     int ngl   = 99;
     int n_ctx = 4096;
 
@@ -116,6 +226,8 @@ int main(int argc, char ** argv) {
                 cache_path = argv[++i];
             } else if (strcmp(argv[i], "--train-log") == 0 && i + 1 < argc) {
                 train_log_path = argv[++i];
+            } else if (strcmp(argv[i], "--memory-db") == 0 && i + 1 < argc) {
+                memory_db_path = argv[++i];
             } else {
                 print_usage(argc, argv);
                 return 1;
@@ -166,6 +278,8 @@ int main(int argc, char ** argv) {
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     wiki_fetch wiki(cache_path);
+    memory_store memory(memory_db_path);
+    int64_t session_id = memory.start_session();
 
     auto generate = [&](const std::string & prompt) {
         std::string response;
@@ -220,6 +334,8 @@ int main(int argc, char ** argv) {
     messages.push_back({"system", strdup(BYTE_SYSTEM_PROMPT)});
 
     std::vector<wiki_turn> history;
+    std::string chat_name; // set via /namechat; lets a bare /save reuse it automatically
+    bool secret_mode = false; // set via /secret; suppresses memory/training logging while on
     std::vector<char> formatted(llama_n_ctx(ctx));
     int prev_len = 0;
 
@@ -232,6 +348,11 @@ int main(int argc, char ** argv) {
     auto answer_directly = [&](const std::string & user, const std::string & answer) {
         printf("\033[33m%s\033[0m\n", answer.c_str());
 
+        if (!secret_mode) {
+            memory.log_turn(session_id, "user", user);
+            memory.log_turn(session_id, "assistant", answer);
+        }
+
         history.push_back({user, answer});
 
         const char * tmpl = llama_model_chat_template(model, /* name */ nullptr);
@@ -242,6 +363,52 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "failed to apply the chat template\n");
             exit(1);
         }
+    };
+
+    // decodes an already-known (user, response) turn straight into the KV cache
+    // instead of sampling it, so a loaded conversation (/load) actually resumes
+    // in-context rather than just being replayed in the on-screen transcript
+    auto prime_turn = [&](const std::string & user, const std::string & response) -> bool {
+        const char * tmpl = llama_model_chat_template(model, /* name */ nullptr);
+
+        messages.push_back({"user", strdup(user.c_str())});
+        int new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+        if (new_len > (int) formatted.size()) {
+            formatted.resize(new_len);
+            new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+        }
+        if (new_len < 0) {
+            return false;
+        }
+        std::string prompt(formatted.begin() + prev_len, formatted.begin() + new_len);
+
+        const bool is_first = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) == -1;
+
+        const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, is_first, true);
+        std::vector<llama_token> prompt_tokens(n_prompt_tokens);
+        llama_tokenize(vocab, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), is_first, true);
+
+        const int n_resp_tokens = -llama_tokenize(vocab, response.c_str(), response.size(), NULL, 0, false, true);
+        std::vector<llama_token> resp_tokens(n_resp_tokens);
+        llama_tokenize(vocab, response.c_str(), response.size(), resp_tokens.data(), resp_tokens.size(), false, true);
+
+        std::vector<llama_token> all_tokens = prompt_tokens;
+        all_tokens.insert(all_tokens.end(), resp_tokens.begin(), resp_tokens.end());
+
+        int n_ctx_cur  = llama_n_ctx(ctx);
+        int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) + 1;
+        if (n_ctx_used + (int) all_tokens.size() > n_ctx_cur) {
+            return false;
+        }
+
+        llama_batch batch = llama_batch_get_one(all_tokens.data(), all_tokens.size());
+        if (llama_decode(ctx, batch) != 0) {
+            return false;
+        }
+
+        messages.push_back({"assistant", strdup(response.c_str())});
+        prev_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), false, nullptr, 0);
+        return prev_len >= 0;
     };
 
     while (true) {
@@ -266,9 +433,159 @@ int main(int argc, char ** argv) {
                 printf("model: %s\n", model_path.c_str());
                 continue;
             }
+            if (lower.rfind("/namechat", 0) == 0) {
+                std::string name = user.size() > 9 ? user.substr(9) : "";
+                size_t a = name.find_first_not_of(' ');
+                name = (a == std::string::npos) ? "" : name.substr(a);
+
+                if (name.empty()) {
+                    printf("usage: /namechat <name>\n");
+                } else {
+                    chat_name = name;
+                    printf("chat named \"%s\" -- /save will use this automatically\n", sanitize_filename(chat_name).c_str());
+                }
+                continue;
+            }
+            if (lower.rfind("/save", 0) == 0) {
+                std::string name = user.size() > 5 ? user.substr(5) : "";
+                size_t a = name.find_first_not_of(' ');
+                name = (a == std::string::npos) ? "" : name.substr(a);
+
+                if (name.empty()) {
+                    name = chat_name; // fall back to the name set via /namechat, if any
+                } else {
+                    chat_name = name; // an explicit name also becomes the chat's name going forward
+                }
+
+                if (name.empty()) {
+                    printf("usage: /save <filename> (or /namechat <name> first, then bare /save)\n");
+                } else if (save_chat(name, history)) {
+                    printf("saved to ~/Byte/%s.Byte_Mem\n", sanitize_filename(name).c_str());
+                } else {
+                    printf("failed to save chat\n");
+                }
+                continue;
+            }
+            if (lower.rfind("/load", 0) == 0) {
+                std::string name = user.size() > 5 ? user.substr(5) : "";
+                size_t a = name.find_first_not_of(' ');
+                name = (a == std::string::npos) ? "" : name.substr(a);
+
+                if (name.empty()) {
+                    printf("usage: /load <filename>\n");
+                    continue;
+                }
+
+                auto loaded = load_chat(name);
+                if (!loaded) {
+                    printf("no saved chat found at ~/Byte/%s.Byte_Mem\n", sanitize_filename(name).c_str());
+                    continue;
+                }
+
+                size_t loaded_count = 0;
+                for (const auto & turn : *loaded) {
+                    if (!prime_turn(turn.user, turn.bot)) {
+                        printf("stopped loading early: ran out of context space\n");
+                        break;
+                    }
+                    history.push_back(turn);
+                    if (!secret_mode) {
+                        memory.log_turn(session_id, "user", turn.user);
+                        memory.log_turn(session_id, "assistant", turn.bot);
+                    }
+                    loaded_count++;
+                }
+                printf("loaded %zu turn(s) from ~/Byte/%s.Byte_Mem\n", loaded_count, sanitize_filename(name).c_str());
+                continue;
+            }
+            if (lower.rfind("/forget", 0) == 0) {
+                std::string arg = user.size() > 7 ? user.substr(7) : "";
+                size_t a = arg.find_first_not_of(' ');
+                arg = (a == std::string::npos) ? "" : arg.substr(a);
+                std::string arg_lower = arg;
+                std::transform(arg_lower.begin(), arg_lower.end(), arg_lower.begin(), [](unsigned char c) { return std::tolower(c); });
+
+                if (arg_lower == "all" || arg_lower == "everything") {
+                    int removed = memory.forget_all();
+                    printf("forgot everything (%d turn(s) removed)\n", removed);
+                } else if (arg.empty()) {
+                    printf("usage: /forget <topic> (or /forget all to wipe everything remembered)\n");
+                } else {
+                    int removed = memory.forget(arg);
+                    printf("forgot %d matching turn(s) about \"%s\"\n", removed, arg.c_str());
+                }
+                continue;
+            }
+            if (lower.rfind("/delchat", 0) == 0) {
+                std::string name = user.size() > 8 ? user.substr(8) : "";
+                size_t a = name.find_first_not_of(' ');
+                name = (a == std::string::npos) ? "" : name.substr(a);
+                std::string clean = sanitize_filename(name);
+
+                const char * home = getenv("HOME");
+                if (clean.empty()) {
+                    printf("usage: /delchat <name>\n");
+                } else if (!home) {
+                    printf("failed to delete chat\n");
+                } else {
+                    std::string path = std::string(home) + "/Byte/" + clean + ".Byte_Mem";
+                    if (remove(path.c_str()) == 0) {
+                        printf("deleted ~/Byte/%s.Byte_Mem\n", clean.c_str());
+                        if (clean == sanitize_filename(chat_name)) {
+                            chat_name.clear();
+                        }
+                    } else {
+                        printf("no saved chat found at ~/Byte/%s.Byte_Mem\n", clean.c_str());
+                    }
+                }
+                continue;
+            }
+            if (lower.rfind("/newchat", 0) == 0) {
+                std::string name = user.size() > 8 ? user.substr(8) : "";
+                size_t a = name.find_first_not_of(' ');
+                name = (a == std::string::npos) ? "" : name.substr(a);
+
+                // free every strdup'd message except the system prompt, then start clean
+                for (size_t i = 1; i < messages.size(); i++) {
+                    free(const_cast<char *>(messages[i].content));
+                }
+                messages.resize(1);
+                history.clear();
+                prev_len = 0;
+                llama_memory_clear(llama_get_memory(ctx), true);
+
+                session_id = memory.start_session();
+                chat_name  = name; // empty clears it, same as no name given
+                secret_mode = false;
+
+                if (name.empty()) {
+                    printf("started a new chat\n");
+                } else {
+                    printf("started a new chat named \"%s\"\n", sanitize_filename(name).c_str());
+                }
+                continue;
+            }
+            if (lower == "/secret") {
+                secret_mode = !secret_mode;
+                if (secret_mode) {
+                    printf("secret mode on -- this conversation won't be remembered or logged\n");
+                } else {
+                    printf("secret mode off -- back to normal logging\n");
+                }
+                continue;
+            }
         }
 
         std::string turn_input = user;
+
+        if (unit_is_requested(user)) {
+            auto result = unit_fetch(user);
+            if (result) {
+                printf("\033[36m[unit]\033[0m\n");
+                answer_directly(user, *result);
+                continue;
+            }
+        }
 
         if (math_is_requested(user)) {
             auto result = math_fetch(user);
@@ -294,6 +611,18 @@ int main(int argc, char ** argv) {
 
         if (is_identity_question(user)) {
             // fall through with no tool lookup; the system prompt already covers this
+        } else if (memory_is_requested(user)) {
+            auto hits = memory.search(user, 5);
+            if (!hits.empty()) {
+                printf("\033[36m[memory]\033[0m\n");
+                std::string context;
+                for (const auto & hit : hits) {
+                    context += "[" + hit.started_at + "] " + hit.role + ": " + hit.content + "\n";
+                }
+                turn_input = "Snippets recalled from past conversations (use these only if relevant to "
+                             "the current request; they may be about unrelated topics):\n" + context +
+                             "\nUser request: " + user;
+            }
         } else if (weather_is_requested(user)) {
             auto weather = weather_fetch(user);
             if (weather) {
@@ -307,7 +636,9 @@ int main(int argc, char ** argv) {
             auto news = news_fetch(user);
             if (news) {
                 printf("\033[36m[news]\033[0m\n");
-                training_log_append("News: " + user, *news, train_log_path);
+                if (!secret_mode) {
+                    training_log_append("News: " + user, *news, train_log_path);
+                }
                 turn_input = "Live news feed just fetched for the user's request (you have no other way to "
                              "know these current headlines, so present this list to them, verbatim titles, "
                              "as your answer):\n" + *news +
@@ -321,7 +652,9 @@ int main(int argc, char ** argv) {
                         [](const std::string & acc, const std::string & s) { return acc.empty() ? s : acc + " " + s; }));
 
                 printf("\033[36m[wiki: %s]\033[0m\n", wiki_result->title.c_str());
-                training_log_append(wiki_result->title, context, train_log_path);
+                if (!secret_mode) {
+                    training_log_append(wiki_result->title, context, train_log_path);
+                }
 
                 turn_input = "Supplementary Wikipedia context on \"" + wiki_result->title + "\" (use this only to "
                              "fill gaps or check current facts your own knowledge might be missing; otherwise "
@@ -352,12 +685,37 @@ int main(int argc, char ** argv) {
         printf("\n\033[0m");
 
         history.back().bot = response;
+        if (!secret_mode) {
+            memory.log_turn(session_id, "user", user);
+            memory.log_turn(session_id, "assistant", response);
+        }
 
         messages.push_back({"assistant", strdup(response.c_str())});
         prev_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), false, nullptr, 0);
         if (prev_len < 0) {
             fprintf(stderr, "failed to apply the chat template\n");
             return 1;
+        }
+    }
+
+    // one last generation pass to summarize the session for cross-session
+    // recall later (memory_store), instead of only ever storing raw turns.
+    // skipped entirely in secret mode, so nothing about it is ever persisted
+    if (!history.empty() && !secret_mode) {
+        const char * tmpl = llama_model_chat_template(model, /* name */ nullptr);
+        messages.push_back({"user", strdup("Summarize this entire conversation in one or two sentences, "
+                                            "for your own future reference. Output only the summary.")});
+        int new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+        if (new_len > (int) formatted.size()) {
+            formatted.resize(new_len);
+            new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+        }
+        if (new_len >= 0) {
+            std::string prompt(formatted.begin() + prev_len, formatted.begin() + new_len);
+            printf("\033[36m[memory] saving session summary\033[0m\n\033[33m");
+            std::string summary = generate(prompt);
+            printf("\n\033[0m");
+            memory.set_session_summary(session_id, summary);
         }
     }
 
