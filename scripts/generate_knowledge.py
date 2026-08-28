@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Generates Byte AI's distilled knowledge base from a bigger local model (Qwen2.5
-3B via Ollama), split into chunks small enough for GitHub, matching the
-category manifest at data/knowledge/categories.json. Fetched dynamically at
-runtime by the category_fetch module (see modules/category_fetch.cpp).
+Generates Byte AI's distilled knowledge base from a bigger local model
+(Phi-3.5-mini via Ollama -- MIT licensed, chosen specifically so the
+generated data carries no redistribution/attribution obligations), split
+into chunks small enough for GitHub, matching the category manifest at
+data/knowledge/categories.json. Fetched dynamically at runtime by the
+category_fetch module (see modules/category_fetch.cpp).
 
 Usage:
     ./generate_knowledge.py [category ...]   # omit to generate every category
@@ -16,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = ROOT / "data" / "knowledge" / "categories.json"
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "qwen2.5:3b"
+MODEL = "phi3.5"
 FACTS_PER_CATEGORY = 20
 MAX_CHUNK_BYTES = 4096  # well under GitHub's 100MB cap; keeps fetches fast
 

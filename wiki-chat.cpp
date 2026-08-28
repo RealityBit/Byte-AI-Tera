@@ -11,6 +11,7 @@
 #include "modules/logo_banner.h"
 #include "modules/math_fetch.h"
 #include "modules/memory_store.h"
+#include "modules/model_fetch.h"
 #include "modules/news_fetch.h"
 #include "modules/quick_response.h"
 #include "modules/scheduler.h"
@@ -56,7 +57,7 @@ static const std::vector<std::string> & known_commands() {
     static const std::vector<std::string> cmds = {
         "/bye", "/quit", "/end", "/exit", "/version", "/ver", "/model", "/user", "/history",
         "/knowledge", "/namechat", "/save", "/load", "/forget", "/delchat", "/newchat",
-        "/secret", "/schedule", "/schedules", "/unschedule", "/wipecfg",
+        "/secret", "/schedule", "/schedules", "/unschedule", "/wipecfg", "/downloadmodel",
     };
     return cmds;
 }
@@ -723,6 +724,23 @@ int main(int argc, char ** argv) {
                     printf("config wiped -- ~/Byte/config.json removed\n");
                 } else {
                     printf("no config file to wipe\n");
+                }
+                continue;
+            }
+            if (lower == "/downloadmodel") {
+                std::string dir = default_byte_path("models");
+                mkdir(dir.c_str(), 0755);
+                std::string out_path = dir + "/phi3.5-mini.gguf";
+
+                printf("downloading phi3.5-mini (MIT licensed) to %s ...\n", out_path.c_str());
+                bool ok = model_fetch(
+                    "https://raw.githubusercontent.com/RetroGigabyte/Byte-AI-Models/main/manifest.json",
+                    out_path);
+
+                if (ok) {
+                    printf("done -- verified checksum. Launch with -m %s to use it.\n", out_path.c_str());
+                } else {
+                    printf("download failed or was incomplete -- run /downloadmodel again to resume\n");
                 }
                 continue;
             }
