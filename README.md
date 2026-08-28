@@ -269,7 +269,8 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 
 ### Session Commands
 ```
-/version           Show a full-color ASCII-art logo, Byte AI version, llama.cpp build, and loaded model
+/version           Show the full-color ASCII-art logo and Byte AI version
+/model             Show the llama.cpp build and loaded model path
 /user <name>        Tell Byte your name; it addresses you by it going forward
 /namechat <name>    Start a completely new, named chat (clears context/KV cache)
 /save [name]        Save the conversation to ~/Byte/<name>.Byte_Mem

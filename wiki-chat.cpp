@@ -54,7 +54,7 @@ static int levenshtein(const std::string & a, const std::string & b) {
 
 static const std::vector<std::string> & known_commands() {
     static const std::vector<std::string> cmds = {
-        "/bye", "/quit", "/end", "/exit", "/version", "/ver", "/user", "/history",
+        "/bye", "/quit", "/end", "/exit", "/version", "/ver", "/model", "/user", "/history",
         "/knowledge", "/namechat", "/save", "/load", "/forget", "/delchat", "/newchat",
         "/secret", "/schedule", "/schedules", "/unschedule",
     };
@@ -630,6 +630,9 @@ int main(int argc, char ** argv) {
             if (lower == "/version" || lower == "/ver") {
                 printf("%s", BYTE_LOGO_BANNER);
                 printf("Byte AI 4.0 \"Tera\"\n");
+                continue;
+            }
+            if (lower == "/model") {
                 printf("llama.cpp build %d (%s), %s\n", llama_build_number(), llama_commit(), llama_build_target());
                 printf("model: %s\n", model_path.c_str());
                 continue;
