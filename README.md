@@ -150,6 +150,19 @@ cross-session recall.
                          training corpus for the rest of the session
 ```
 
+#### Scheduled Automations
+```
+/schedule 08:00 HackerNews    Runs "HackerNews" daily at 8am via cron, appending
+                               the reply to a local report file
+/schedules                    List every job Byte has scheduled
+/unschedule byte-1             Remove a scheduled job by name
+```
+Installs a real entry in your own crontab (tagged `# byte-ai:<name>` so only Byte's own jobs are ever
+touched), re-invoking the binary in `--batch` mode -- genuinely unattended, works even if the interactive
+session isn't running. Local file output only, no external delivery integrations. Inspired by
+[hermes-agent](https://github.com/NousResearch/hermes-agent)'s built-in cron scheduler, scoped down
+accordingly.
+
 ---
 
 ## Getting Started
@@ -195,6 +208,8 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 | `--cache` | Wikipedia cache file | `wiki-chat-cache.json` |
 | `--train-log` | training corpus file | `wiki-chat-training.txt` |
 | `--memory-db` | cross-session memory database | `wiki-chat-memory.db` |
+| `--report` | scheduled-job report file | `wiki-chat-reports.txt` |
+| `--batch "<prompt>"` | run one turn non-interactively and exit (used by `/schedule`) | -- |
 
 ---
 
@@ -249,6 +264,9 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 /forget <topic>     Delete matching turns from cross-session memory
 /forget all         Wipe all cross-session memory
 /secret             Toggle: stop logging to memory/training for this session
+/schedule <HH:MM> <prompt>   Schedule a daily automated prompt via cron
+/schedules          List scheduled jobs
+/unschedule <name>  Remove a scheduled job
 /bye                Exit (also /quit, /end, /exit)
 ```
 
@@ -275,6 +293,7 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 | Save/Load/Manage Chats | Working | `/save`, `/load` (resumes in actual model context), `/delchat`, `/newchat`, `/namechat`, `/history` |
 | Forget / Secret Mode | Working | `/forget <topic>`/`/forget all` deletes from memory; `/secret` suppresses logging |
 | User Name (`/user`) | Working | Folded into the system prompt and the "who am i" quick reply |
+| Scheduled Automations | Working | `/schedule`/`/schedules`/`/unschedule`, real crontab entries, `--batch` mode |
 
 ---
 
@@ -367,6 +386,7 @@ Byte-AI-Tera/
 │   ├── weather_fetch.{h,cpp}  # wttr.in current conditions
 │   ├── quick_response.{h,cpp} # instant canned replies for greetings/acknowledgements
 │   ├── memory_store.{h,cpp}   # SQLite FTS5 cross-session memory, recall, forget
+│   ├── scheduler.{h,cpp}      # local cron-based scheduled automations
 │   └── training_log.{h,cpp}   # local training corpus collection
 ├── retrain.sh                 # folds the corpus back into the model via llama-finetune
 ├── CMakeLists.txt             # builds llama-wiki-chat once dropped into llama.cpp/examples/

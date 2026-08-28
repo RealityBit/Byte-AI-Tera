@@ -11,6 +11,7 @@
 #include "modules/memory_store.h"
 #include "modules/news_fetch.h"
 #include "modules/quick_response.h"
+#include "modules/scheduler.h"
 #include "modules/training_log.h"
 #include "modules/unit_fetch.h"
 #include "modules/weather_fetch.h"
@@ -19,8 +20,10 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <climits>
 #include <clocale>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <dirent.h>
 #include <fstream>
@@ -31,6 +34,7 @@
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 // short conversational turns that are not knowledge lookups, so a Wikipedia
@@ -228,7 +232,7 @@ static std::vector<std::string> list_saved_chats() {
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [--cache path.json] [--train-log path.txt] [--memory-db path.db]\n", argv[0]);
+    printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [--cache path.json] [--train-log path.txt] [--memory-db path.db] [--report path.txt] [--batch \"prompt\"]\n", argv[0]);
     printf("\n");
 }
 
@@ -239,6 +243,8 @@ int main(int argc, char ** argv) {
     std::string cache_path = "wiki-chat-cache.json";
     std::string train_log_path = "wiki-chat-training.txt";
     std::string memory_db_path = "wiki-chat-memory.db";
+    std::string report_path = "wiki-chat-reports.txt";
+    std::optional<std::string> batch_prompt;
     int ngl   = 99;
     int n_ctx = 4096;
 
@@ -256,6 +262,10 @@ int main(int argc, char ** argv) {
                 train_log_path = argv[++i];
             } else if (strcmp(argv[i], "--memory-db") == 0 && i + 1 < argc) {
                 memory_db_path = argv[++i];
+            } else if (strcmp(argv[i], "--report") == 0 && i + 1 < argc) {
+                report_path = argv[++i];
+            } else if (strcmp(argv[i], "--batch") == 0 && i + 1 < argc) {
+                batch_prompt = argv[++i];
             } else {
                 print_usage(argc, argv);
                 return 1;
@@ -269,6 +279,25 @@ int main(int argc, char ** argv) {
     if (model_path.empty()) {
         print_usage(argc, argv);
         return 1;
+    }
+
+    // resolved to absolute paths so /schedule's installed cron line still
+    // works regardless of cron's own working directory (which is typically
+    // not the directory this was launched from)
+    std::string binary_path = model_path; // placeholder, overwritten below
+    {
+        char resolved[PATH_MAX];
+        if (realpath(argv[0], resolved)) {
+            binary_path = resolved;
+        }
+        if (realpath(model_path.c_str(), resolved)) {
+            model_path = resolved;
+        }
+        // report_path's file may not exist yet, so realpath() (which requires
+        // the target to exist) can't be used -- just prepend cwd if relative
+        if (!report_path.empty() && report_path[0] != '/' && getcwd(resolved, sizeof(resolved))) {
+            report_path = std::string(resolved) + "/" + report_path;
+        }
     }
 
     llama_log_set([](enum ggml_log_level level, const char * text, void * /* user_data */) {
@@ -477,6 +506,73 @@ int main(int argc, char ** argv) {
         }
     };
 
+    // --batch mode: a single non-interactive turn, meant to be re-invoked by
+    // cron via /schedule. routes through the same tool detectors as the
+    // interactive loop, generates one reply, appends it to --report, and exits
+    if (batch_prompt) {
+        const std::string & user = *batch_prompt;
+        std::string turn_input = user;
+
+        if (auto result = unit_fetch(user)) {
+            turn_input = "Computed unit conversion (state this directly): " + *result;
+        } else if (auto result = math_fetch(user)) {
+            turn_input = "Computed result (state this directly): " + *result;
+        } else if (datetime_is_requested(user)) {
+            turn_input = "Current date/time (state this directly): " + datetime_fetch(user);
+        } else if (weather_is_requested(user)) {
+            if (auto weather = weather_fetch(user)) {
+                turn_input = "Live weather data just fetched (report it directly, no hedging): " + *weather +
+                             "\nUser request: " + user;
+            }
+        } else if (news_is_requested(user)) {
+            if (auto news = news_fetch(user)) {
+                turn_input = "Live news feed just fetched (present this list verbatim as your answer):\n" + *news +
+                             "\nUser request: " + user;
+            }
+        } else if (auto wiki_result = wiki.learn(user, {})) {
+            std::string context = wiki_fetch::format_response(
+                std::accumulate(wiki_result->sentences.begin(), wiki_result->sentences.end(), std::string(),
+                    [](const std::string & acc, const std::string & s) { return acc.empty() ? s : acc + " " + s; }));
+            turn_input = "Supplementary Wikipedia context on \"" + wiki_result->title + "\": " + context +
+                         "\n\nUser question: " + user;
+        }
+
+        messages.push_back({"user", strdup(turn_input.c_str())});
+        const char * tmpl = llama_model_chat_template(model, /* name */ nullptr);
+        int new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+        if (new_len > (int) formatted.size()) {
+            formatted.resize(new_len);
+            new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+        }
+        if (new_len < 0) {
+            fprintf(stderr, "failed to apply the chat template\n");
+            return 1;
+        }
+
+        std::string prompt(formatted.begin() + prev_len, formatted.begin() + new_len);
+        std::string response = generate(prompt);
+        printf("\n");
+
+        memory.log_turn(session_id, "user", user);
+        memory.log_turn(session_id, "assistant", response);
+
+        std::ofstream report(report_path, std::ios::app);
+        if (report.is_open()) {
+            report << "### " << datetime_fetch("") << "\n" << user << "\n\n" << response << "\n\n";
+        }
+
+        // same cleanup order as the interactive path's exit below -- skipping
+        // this before returning left ggml-metal's static teardown crashing at exit
+        for (auto & msg : messages) {
+            free(const_cast<char *>(msg.content));
+        }
+        llama_sampler_free(smpl);
+        llama_free(ctx);
+        llama_model_free(model);
+
+        return 0;
+    }
+
     while (true) {
         printf("\033[32m> \033[0m");
         std::string user;
@@ -645,6 +741,51 @@ int main(int argc, char ** argv) {
                     printf("secret mode on -- this conversation won't be remembered or logged\n");
                 } else {
                     printf("secret mode off -- back to normal logging\n");
+                }
+                continue;
+            }
+            if (lower.rfind("/schedule ", 0) == 0 || lower == "/schedule") {
+                std::string rest = user.size() > 9 ? user.substr(9) : "";
+                size_t a = rest.find_first_not_of(' ');
+                rest = (a == std::string::npos) ? "" : rest.substr(a);
+
+                size_t sp = rest.find(' ');
+                std::string time_arg = sp == std::string::npos ? rest : rest.substr(0, sp);
+                std::string prompt   = sp == std::string::npos ? "" : rest.substr(sp + 1);
+
+                if (time_arg.empty() || prompt.empty()) {
+                    printf("usage: /schedule <HH:MM> <prompt> (24-hour, runs daily)\n");
+                } else if (auto name = schedule_add(time_arg, prompt, binary_path, model_path, ngl, report_path)) {
+                    printf("scheduled \"%s\" daily at %s (job %s) -- results append to %s\n",
+                           prompt.c_str(), time_arg.c_str(), name->c_str(), report_path.c_str());
+                } else {
+                    printf("failed to schedule -- check the time format (HH:MM, 24-hour)\n");
+                }
+                continue;
+            }
+            if (lower == "/schedules") {
+                auto jobs = schedule_list();
+                if (jobs.empty()) {
+                    printf("no scheduled jobs -- use /schedule <HH:MM> <prompt> to add one\n");
+                } else {
+                    printf("scheduled jobs:\n");
+                    for (const auto & job : jobs) {
+                        printf("  %s  daily %s  \"%s\"\n", job.name.c_str(), job.time.c_str(), job.prompt.c_str());
+                    }
+                }
+                continue;
+            }
+            if (lower.rfind("/unschedule", 0) == 0) {
+                std::string name = user.size() > 11 ? user.substr(11) : "";
+                size_t a = name.find_first_not_of(' ');
+                name = (a == std::string::npos) ? "" : name.substr(a);
+
+                if (name.empty()) {
+                    printf("usage: /unschedule <job-name> (see /schedules for names)\n");
+                } else if (schedule_remove(name)) {
+                    printf("removed scheduled job %s\n", name.c_str());
+                } else {
+                    printf("no scheduled job named %s\n", name.c_str());
                 }
                 continue;
             }
