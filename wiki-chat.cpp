@@ -517,6 +517,10 @@ int main(int argc, char ** argv) {
     }
 
     llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    // penalizes recently-used tokens so small models are less likely to fall
+    // into a degenerate repetition loop (observed: Phi-3.5-mini looping
+    // forever re-deriving the same correct numbers while insisting they were wrong)
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(llama_vocab_n_tokens(vocab), 256, 1.1f, 0.0f, 0.0f));
     llama_sampler_chain_add(smpl, llama_sampler_init_min_p(0.05f, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.8f));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
@@ -539,12 +543,24 @@ int main(int argc, char ** argv) {
 
         llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
         llama_token new_token_id;
+        // a hard cap independent of context size: even with the repetition
+        // penalty above, a small model can still get stuck re-deriving the
+        // same (sometimes already-correct) answer forever. give up cleanly
+        // rather than run until context overflow
+        const int max_response_tokens = 1024;
+        int n_generated = 0;
         while (true) {
             int n_ctx_cur  = llama_n_ctx(ctx);
             int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) + 1;
             if (n_ctx_used + batch.n_tokens > n_ctx_cur) {
                 printf("\033[0m\n");
                 fprintf(stderr, "context size exceeded\n");
+                // same cleanup order as the interactive loop's normal exit path
+                // below -- exit()ing straight from here used to skip it and crash
+                // ggml-metal's teardown
+                llama_sampler_free(smpl);
+                llama_free(ctx);
+                llama_model_free(model);
                 exit(0);
             }
 
@@ -568,6 +584,12 @@ int main(int argc, char ** argv) {
             printf("%s", piece.c_str());
             fflush(stdout);
             response += piece;
+
+            if (++n_generated >= max_response_tokens) {
+                printf("\n\033[36m[gave up -- response was running too long / repeating]\033[0m");
+                fflush(stdout);
+                return std::string("I can't answer this properly :(");
+            }
 
             batch = llama_batch_get_one(&new_token_id, 1);
         }
@@ -720,6 +742,8 @@ int main(int argc, char ** argv) {
         }
 
         llama_sampler * new_smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(new_smpl, llama_sampler_init_penalties(
+            llama_vocab_n_tokens(llama_model_get_vocab(new_model)), 256, 1.1f, 0.0f, 0.0f));
         llama_sampler_chain_add(new_smpl, llama_sampler_init_min_p(0.05f, 1));
         llama_sampler_chain_add(new_smpl, llama_sampler_init_temp(0.8f));
         llama_sampler_chain_add(new_smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
