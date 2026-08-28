@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Converts Byte_AI.png into a full-color ANSI truecolor ASCII-art banner using
-half-block characters (each terminal cell encodes two source pixels: a
-foreground-colored top half and background-colored bottom half via the U+2580
-"upper half block" character), then emits it as a C++ header with the banner
-baked in as a raw string literal, printed by /version.
+Converts Byte_AI.png into a full-color ANSI ASCII-art banner using classic
+brightness-mapped characters (a ramp from sparse/blank for dark pixels to
+dense "@"/"#"/"%" for bright ones, each colored via truecolor foreground
+escapes from the source pixel), then emits it as a C++ header with the
+banner baked in as a raw string literal, printed by /version.
 
 Usage:
     ./generate_logo_ascii.py [width_in_columns]
@@ -18,27 +18,34 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC_PNG = ROOT / "Byte_AI.png"
 OUT_HEADER = ROOT / "modules" / "logo_banner.h"
 
-WIDTH = int(sys.argv[1]) if len(sys.argv) > 1 else 32
+WIDTH = int(sys.argv[1]) if len(sys.argv) > 1 else 48
+
+# sparsest (dark) to densest (bright)
+RAMP = " .:-=+*#%@"
 
 
 def build_banner(width: int) -> str:
     img = Image.open(SRC_PNG).convert("RGB")
 
-    # each output row uses 2 source pixel-rows (half-block trick), so sample
-    # at double vertical resolution relative to the character grid
+    # terminal character cells are roughly twice as tall as wide, so sample
+    # fewer rows than columns to keep the aspect ratio looking right
     aspect = img.height / img.width
-    height = max(1, round(width * aspect / 2))  # /2: terminal chars are ~2x tall as wide
+    height = max(1, round(width * aspect / 2))
 
-    img = img.resize((width, height * 2))
-    px = img.load()
+    small = img.resize((width, height), Image.LANCZOS)
+    px = small.load()
 
     lines = []
-    for y in range(0, height * 2, 2):
+    for y in range(height):
         line = []
         for x in range(width):
-            top = px[x, y]
-            bot = px[x, y + 1] if y + 1 < height * 2 else top
-            line.append(f"\\033[38;2;{top[0]};{top[1]};{top[2]}m\\033[48;2;{bot[0]};{bot[1]};{bot[2]}m▀")
+            r, g, b = px[x, y]
+            brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+            ch = RAMP[min(len(RAMP) - 1, int(brightness * len(RAMP)))]
+            if ch == " ":
+                line.append(" ")
+            else:
+                line.append(f"\\033[38;2;{r};{g};{b}m{ch}")
         lines.append("".join(line) + "\\033[0m")
     return "\\n".join(lines)
 
