@@ -1,9 +1,13 @@
+<p align="center">
+  <img src="Byte_AI.png" alt="Byte AI logo" width="200">
+</p>
+
 # Byte AI 4.0 "Tera"
 
 **Your intelligent assistant that learns, remembers, and understands context.**
 
-[![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](https://github.com/RetroGigabyte/Byte-AI-Tera)
-[![Status](https://img.shields.io/badge/status-Beta%20Active-green.svg)](https://github.com/RetroGigabyte/Byte-AI-Tera)
+[![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](https://github.com/RealityBit/Byte-AI-Tera)
+[![Status](https://img.shields.io/badge/status-Beta%20Active-green.svg)](https://github.com/RealityBit/Byte-AI-Tera)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ---
@@ -187,7 +191,7 @@ Byte AI 4.0 is a llama.cpp example, so it needs a llama.cpp checkout to build ag
 ```bash
 # Clone llama.cpp and drop Byte's source into its examples directory
 git clone https://github.com/ggml-org/llama.cpp.git
-git clone https://github.com/RetroGigabyte/Byte-AI-Tera.git
+git clone https://github.com/RealityBit/Byte-AI-Tera.git
 mkdir -p llama.cpp/examples/wiki-chat
 cp -r Byte-AI-Tera/wiki-chat.cpp Byte-AI-Tera/modules Byte-AI-Tera/CMakeLists.txt Byte-AI-Tera/retrain.sh llama.cpp/examples/wiki-chat/
 ```
@@ -498,10 +502,10 @@ MIT License - feel free to use, modify, and distribute.
 
 | Link | Purpose |
 |------|---------|
-| [Repository](https://github.com/RetroGigabyte/Byte-AI-Tera) | Source code |
+| [Repository](https://github.com/RealityBit/Byte-AI-Tera) | Source code |
 | [Byte_AI (3.0 "Mega")](https://github.com/RetroGigabyte/Byte_AI) | The original browser-based predecessor |
 | [Wiki-Fetch](https://github.com/RetroGigabyte/Wiki-Fetch) | The Wikipedia module this was ported from |
-| [Issues](https://github.com/RetroGigabyte/Byte-AI-Tera/issues) | Bug reports |
+| [Issues](https://github.com/RealityBit/Byte-AI-Tera/issues) | Bug reports |
 
 ---
 
