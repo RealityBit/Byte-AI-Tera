@@ -29,7 +29,6 @@ const std::map<std::string, std::string> & responses() {
         {"help", "I'm Byte 4.0 \"Tera\". Ask me anything -- I can look things up on Wikipedia, "
                   "check HackerNews/Dev.to, do math, tell you the time in any US timezone, and "
                   "check the weather. Try \"tell me more\" after a question for follow-ups."},
-        {"who am i", "You're the one asking the questions! What would you like to know?"},
         {"how are you", "Doing well, thanks! How can I help?"},
         {"thanks", "You're welcome!"},
         {"thank you", "You're welcome!"},
@@ -42,11 +41,17 @@ const std::map<std::string, std::string> & responses() {
 
 } // namespace
 
-std::optional<std::string> quick_response(const std::string & query) {
+std::optional<std::string> quick_response(const std::string & query, const std::string & user_name) {
     std::string lower = to_lower(query);
 
     static const std::regex trailing_punct(R"([.!?;,]+$)");
     std::string clean = std::regex_replace(lower, trailing_punct, "");
+
+    static const std::regex who_am_i_re(R"(\bwho am i\b)");
+    if (std::regex_search(clean, who_am_i_re)) {
+        return user_name.empty() ? "You're the one asking the questions! What would you like to know?"
+                                  : "You're " + user_name + "!";
+    }
 
     auto & map = responses();
 

@@ -135,17 +135,19 @@ cross-session recall.
 
 #### Save / Load / Manage Conversations
 ```
-/namechat project-x     Name the current chat (a later bare /save reuses this)
+/user Retro              Tell Byte your name; it addresses you by it going forward
+/namechat project-x      Start a completely new chat, named (context/KV cache reset)
 /save [name]             Save the conversation to ~/Byte/<name>.Byte_Mem
 /load <name>             Resume a saved conversation -- actually decoded back into
-                          the model's context, not just replayed as text
+                         the model's context, not just replayed as text
 /delchat <name>          Delete a saved chat file
-/newchat [name]           Start fresh: clears context, KV cache, and starts a new
-                          memory session, optionally naming the new chat
+/newchat [name]          Start fresh: clears context, KV cache, and starts a new
+                         memory session, optionally naming the new chat
+/history                 List every saved chat in ~/Byte
 /forget <topic>          Delete every past turn (any session) matching a topic
-/forget all               Wipe all cross-session memory
-/secret                   Toggle: while on, nothing is logged to memory or the
-                          training corpus for the rest of the session
+/forget all              Wipe all cross-session memory
+/secret                  Toggle: while on, nothing is logged to memory or the
+                         training corpus for the rest of the session
 ```
 
 ---
@@ -237,11 +239,13 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 ### Session Commands
 ```
 /version           Show Byte AI version, llama.cpp build, and loaded model
-/namechat <name>    Name the current chat for later bare /save
+/user <name>        Tell Byte your name; it addresses you by it going forward
+/namechat <name>    Start a completely new, named chat (clears context/KV cache)
 /save [name]        Save the conversation to ~/Byte/<name>.Byte_Mem
 /load <name>        Resume a saved conversation
 /delchat <name>     Delete a saved chat
 /newchat [name]     Start a fresh conversation (clears context/KV cache)
+/history            List every saved chat
 /forget <topic>     Delete matching turns from cross-session memory
 /forget all         Wipe all cross-session memory
 /secret             Toggle: stop logging to memory/training for this session
@@ -268,8 +272,9 @@ Grab a Llama 3.2 1B Instruct GGUF from e.g.
 | Instant Quick Replies | Working | Greetings/thanks/help, model bypassed |
 | Unit Converter | Working | Length/weight/volume/speed/temperature, model bypassed |
 | Cross-Session Memory | Working | SQLite FTS5, recall across separate processes, session summaries |
-| Save/Load/Manage Chats | Working | `/save`, `/load` (resumes in actual model context), `/delchat`, `/newchat`, `/namechat` |
+| Save/Load/Manage Chats | Working | `/save`, `/load` (resumes in actual model context), `/delchat`, `/newchat`, `/namechat`, `/history` |
 | Forget / Secret Mode | Working | `/forget <topic>`/`/forget all` deletes from memory; `/secret` suppresses logging |
+| User Name (`/user`) | Working | Folded into the system prompt and the "who am i" quick reply |
 
 ---
 

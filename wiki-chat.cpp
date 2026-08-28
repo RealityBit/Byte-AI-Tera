@@ -22,6 +22,7 @@
 #include <clocale>
 #include <cstdio>
 #include <cstring>
+#include <dirent.h>
 #include <fstream>
 #include <iostream>
 #include <numeric>
@@ -198,6 +199,33 @@ static std::optional<std::vector<wiki_turn>> load_chat(const std::string & name)
     return turns;
 }
 
+// lists every saved chat's name (without the .Byte_Mem suffix) in ~/Byte
+static std::vector<std::string> list_saved_chats() {
+    std::vector<std::string> names;
+
+    const char * home = getenv("HOME");
+    if (!home) {
+        return names;
+    }
+
+    DIR * dir = opendir((std::string(home) + "/Byte").c_str());
+    if (!dir) {
+        return names;
+    }
+
+    static const std::string suffix = ".Byte_Mem";
+    while (dirent * entry = readdir(dir)) {
+        std::string name = entry->d_name;
+        if (name.size() > suffix.size() && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            names.push_back(name.substr(0, name.size() - suffix.size()));
+        }
+    }
+    closedir(dir);
+
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
     printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [--cache path.json] [--train-log path.txt] [--memory-db path.db]\n", argv[0]);
@@ -336,6 +364,20 @@ int main(int argc, char ** argv) {
     std::vector<wiki_turn> history;
     std::string chat_name; // set via /namechat; lets a bare /save reuse it automatically
     bool secret_mode = false; // set via /secret; suppresses memory/training logging while on
+    std::string user_name; // set via /user; folded into the system prompt so Byte addresses them by name
+
+    // rebuilds messages[0] from BYTE_SYSTEM_PROMPT plus the user's name, if set.
+    // like the other system-prompt edits in this codebase, this only affects
+    // prompts built from here on -- context already decoded into the KV cache
+    // keeps whatever system prompt was in effect at the time
+    auto update_system_prompt = [&]() {
+        std::string prompt = BYTE_SYSTEM_PROMPT;
+        if (!user_name.empty()) {
+            prompt += " The user you're talking to is named " + user_name + "; address them by name naturally.";
+        }
+        free(const_cast<char *>(messages[0].content));
+        messages[0].content = strdup(prompt.c_str());
+    };
     std::vector<char> formatted(llama_n_ctx(ctx));
     int prev_len = 0;
 
@@ -411,6 +453,30 @@ int main(int argc, char ** argv) {
         return prev_len >= 0;
     };
 
+    // clears conversation state (messages, history, KV cache) and starts a
+    // fresh memory session, optionally naming it -- shared by /newchat and
+    // /namechat, since naming a chat starts a new one rather than renaming
+    // whatever's currently in progress
+    auto start_new_chat = [&](const std::string & name) {
+        for (size_t i = 1; i < messages.size(); i++) {
+            free(const_cast<char *>(messages[i].content));
+        }
+        messages.resize(1);
+        history.clear();
+        prev_len = 0;
+        llama_memory_clear(llama_get_memory(ctx), true);
+
+        session_id  = memory.start_session();
+        chat_name   = name; // empty clears it, same as no name given
+        secret_mode = false;
+
+        if (name.empty()) {
+            printf("started a new chat\n");
+        } else {
+            printf("started a new chat named \"%s\"\n", sanitize_filename(name).c_str());
+        }
+    };
+
     while (true) {
         printf("\033[32m> \033[0m");
         std::string user;
@@ -433,16 +499,41 @@ int main(int argc, char ** argv) {
                 printf("model: %s\n", model_path.c_str());
                 continue;
             }
+            if (lower.rfind("/user", 0) == 0) {
+                std::string name = user.size() > 5 ? user.substr(5) : "";
+                size_t a = name.find_first_not_of(' ');
+                name = (a == std::string::npos) ? "" : name.substr(a);
+
+                if (name.empty()) {
+                    printf("usage: /user <name>\n");
+                } else {
+                    user_name = name;
+                    update_system_prompt();
+                    printf("got it -- I'll call you %s\n", user_name.c_str());
+                }
+                continue;
+            }
+            if (lower == "/history") {
+                auto chats = list_saved_chats();
+                if (chats.empty()) {
+                    printf("no saved chats yet -- use /save <name> to save one\n");
+                } else {
+                    printf("saved chats (~/Byte):\n");
+                    for (const auto & name : chats) {
+                        printf("  %s\n", name.c_str());
+                    }
+                }
+                continue;
+            }
             if (lower.rfind("/namechat", 0) == 0) {
                 std::string name = user.size() > 9 ? user.substr(9) : "";
                 size_t a = name.find_first_not_of(' ');
                 name = (a == std::string::npos) ? "" : name.substr(a);
 
                 if (name.empty()) {
-                    printf("usage: /namechat <name>\n");
+                    printf("usage: /namechat <name> -- starts a completely new, named chat\n");
                 } else {
-                    chat_name = name;
-                    printf("chat named \"%s\" -- /save will use this automatically\n", sanitize_filename(chat_name).c_str());
+                    start_new_chat(name);
                 }
                 continue;
             }
@@ -545,24 +636,7 @@ int main(int argc, char ** argv) {
                 size_t a = name.find_first_not_of(' ');
                 name = (a == std::string::npos) ? "" : name.substr(a);
 
-                // free every strdup'd message except the system prompt, then start clean
-                for (size_t i = 1; i < messages.size(); i++) {
-                    free(const_cast<char *>(messages[i].content));
-                }
-                messages.resize(1);
-                history.clear();
-                prev_len = 0;
-                llama_memory_clear(llama_get_memory(ctx), true);
-
-                session_id = memory.start_session();
-                chat_name  = name; // empty clears it, same as no name given
-                secret_mode = false;
-
-                if (name.empty()) {
-                    printf("started a new chat\n");
-                } else {
-                    printf("started a new chat named \"%s\"\n", sanitize_filename(name).c_str());
-                }
+                start_new_chat(name);
                 continue;
             }
             if (lower == "/secret") {
@@ -604,7 +678,7 @@ int main(int argc, char ** argv) {
 
         // instant canned replies for greetings/acknowledgements, same reasoning as
         // math/datetime: no need to spend a generation pass on "hi" or "thanks"
-        if (auto quick = quick_response(user)) {
+        if (auto quick = quick_response(user, user_name)) {
             answer_directly(user, *quick);
             continue;
         }
