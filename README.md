@@ -161,7 +161,7 @@ Byte AI 4.0 is a llama.cpp example, so it needs a llama.cpp checkout to build ag
 git clone https://github.com/ggml-org/llama.cpp.git
 git clone https://github.com/RetroGigabyte/Byte-AI-Tera.git
 mkdir -p llama.cpp/examples/wiki-chat
-cp Byte-AI-Tera/*.cpp Byte-AI-Tera/*.h Byte-AI-Tera/CMakeLists.txt Byte-AI-Tera/retrain.sh llama.cpp/examples/wiki-chat/
+cp -r Byte-AI-Tera/wiki-chat.cpp Byte-AI-Tera/modules Byte-AI-Tera/CMakeLists.txt Byte-AI-Tera/retrain.sh llama.cpp/examples/wiki-chat/
 ```
 
 Add `wiki-chat` as a subdirectory in `llama.cpp/examples/CMakeLists.txt` -- this is the **only** line
@@ -357,19 +357,20 @@ against an F32 Llama 3.2 1B model.
 ### Project Structure
 ```
 Byte-AI-Tera/
-├── wiki-chat.cpp          # main chat loop, tool routing, Byte's system prompt
-├── wiki_fetch.{h,cpp}     # Wikipedia REST API, cache, context-awareness
-├── news_fetch.{h,cpp}     # HackerNews + Dev.to
-├── datetime_fetch.{h,cpp} # system clock, timezone conversion
-├── math_fetch.{h,cpp}     # exact arithmetic
-├── unit_fetch.{h,cpp}     # length/weight/volume/speed/temperature conversion
-├── weather_fetch.{h,cpp}  # wttr.in current conditions
-├── quick_response.{h,cpp} # instant canned replies for greetings/acknowledgements
-├── memory_store.{h,cpp}   # SQLite FTS5 cross-session memory, recall, forget
-├── training_log.{h,cpp}   # local training corpus collection
-├── retrain.sh             # folds the corpus back into the model via llama-finetune
-├── CMakeLists.txt         # builds llama-wiki-chat once dropped into llama.cpp/examples/
-└── README.md              # this file
+├── wiki-chat.cpp              # main chat loop, tool routing, Byte's system prompt
+├── modules/
+│   ├── wiki_fetch.{h,cpp}     # Wikipedia REST API, cache, context-awareness
+│   ├── news_fetch.{h,cpp}     # HackerNews + Dev.to
+│   ├── datetime_fetch.{h,cpp} # system clock, timezone conversion
+│   ├── math_fetch.{h,cpp}     # exact arithmetic
+│   ├── unit_fetch.{h,cpp}     # length/weight/volume/speed/temperature conversion
+│   ├── weather_fetch.{h,cpp}  # wttr.in current conditions
+│   ├── quick_response.{h,cpp} # instant canned replies for greetings/acknowledgements
+│   ├── memory_store.{h,cpp}   # SQLite FTS5 cross-session memory, recall, forget
+│   └── training_log.{h,cpp}   # local training corpus collection
+├── retrain.sh                 # folds the corpus back into the model via llama-finetune
+├── CMakeLists.txt             # builds llama-wiki-chat once dropped into llama.cpp/examples/
+└── README.md                  # this file
 ```
 
 Each knowledge source follows the same pattern: a `*_is_requested(query)` detector and a `*_fetch(query)`
@@ -404,7 +405,7 @@ Open a GitHub issue with:
 ### Development Setup
 ```bash
 # Edit source files directly, then re-copy into your llama.cpp checkout
-cp *.cpp *.h llama.cpp/examples/wiki-chat/
+cp -r wiki-chat.cpp modules llama.cpp/examples/wiki-chat/
 cd llama.cpp
 cmake --build build --target llama-wiki-chat -j
 

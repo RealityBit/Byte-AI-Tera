@@ -6,15 +6,15 @@
 
 #include "llama.h"
 #include "build-info.h"
-#include "datetime_fetch.h"
-#include "math_fetch.h"
-#include "memory_store.h"
-#include "news_fetch.h"
-#include "quick_response.h"
-#include "training_log.h"
-#include "unit_fetch.h"
-#include "weather_fetch.h"
-#include "wiki_fetch.h"
+#include "modules/datetime_fetch.h"
+#include "modules/math_fetch.h"
+#include "modules/memory_store.h"
+#include "modules/news_fetch.h"
+#include "modules/quick_response.h"
+#include "modules/training_log.h"
+#include "modules/unit_fetch.h"
+#include "modules/weather_fetch.h"
+#include "modules/wiki_fetch.h"
 
 #include <nlohmann/json.hpp>
 
