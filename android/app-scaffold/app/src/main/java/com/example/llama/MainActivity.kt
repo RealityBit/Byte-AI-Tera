@@ -634,7 +634,17 @@ class MainActivity : AppCompatActivity() {
         val reply: String? = when (cmd) {
             "/model" -> loadedModelInfo
             "/specs" -> gatherAndroidSpecs().trim()
-            "/version", "/ver" -> "Byte AI 4.0 \"Tera\" -- Android"
+            "/version", "/ver" -> {
+                // Shows the real logo bitmap instead of text -- the desktop CLI's ANSI-colored
+                // ASCII art banner doesn't render in a plain TextView, and blocky ASCII art
+                // scales poorly on a phone screen anyway
+                userInputEt.text = null
+                messages.add(Message(UUID.randomUUID().toString(), raw, true))
+                messages.add(Message(UUID.randomUUID().toString(), "", false, isImage = true))
+                messages.add(Message(UUID.randomUUID().toString(), "Byte AI 4.0 \"Tera\" -- Android", false))
+                messageAdapter.notifyDataSetChanged()
+                return true
+            }
             "/help", "/?" -> {
                 showHelpDialog()
                 return true
