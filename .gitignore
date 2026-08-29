@@ -3,3 +3,4 @@ wiki-chat-cache.json
 wiki-chat-training.txt
 wiki-chat-training.trained_offset
 build/
+.DS_Store
