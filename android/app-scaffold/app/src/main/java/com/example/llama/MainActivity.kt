@@ -422,28 +422,28 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * After a generation pass, checks whether the model's entire response was a TOOL:
-     * request instead of an answer; if so, executes it and streams one follow-up
-     * generation with the result. Single follow-up only, same as the desktop CLI --
-     * the follow-up prompt's phrasing steers the model toward answering, not chaining
-     * further tool requests.
+     * request instead of an answer; if so, drops that bubble (the raw "TOOL: ..." line
+     * is an implementation detail, never meant to be user-visible -- same as the desktop
+     * CLI, which prints its own "[tool: name]" indicator instead of the raw line), executes
+     * the tool, and streams one follow-up generation with the result into a fresh bubble.
+     * Single follow-up only, same as the desktop CLI -- the follow-up prompt's phrasing
+     * steers the model toward answering, not chaining further tool requests.
      */
     private suspend fun handlePotentialToolRequest(response: String) {
         val (name, query) = Tools.parseToolRequest(response) ?: return
-        val result = executeToolByName(name, query)
-        val followup = if (result != null) {
-            "Tool result for \"$query\": $result\nNow answer the user's original question using this."
-        } else {
-            null
+
+        withContext(Dispatchers.Main) {
+            if (messages.isNotEmpty()) messages.removeAt(messages.size - 1)
+            messageAdapter.notifyDataSetChanged()
         }
-        if (followup != null) {
-            streamGeneration(followup)
+
+        val result = executeToolByName(name, query)
+        if (result != null) {
+            streamGeneration("Tool result for \"$query\": $result\nNow answer the user's original question using this.")
         } else {
             withContext(Dispatchers.Main) {
-                val messageCount = messages.size
-                messages.removeAt(messageCount - 1).copy(
-                    content = "I tried to look that up but couldn't get a result."
-                ).let { messages.add(it) }
-                messageAdapter.notifyItemChanged(messages.size - 1)
+                messages.add(Message(UUID.randomUUID().toString(), "I tried to look that up but couldn't get a result.", false))
+                messageAdapter.notifyDataSetChanged()
             }
         }
     }
