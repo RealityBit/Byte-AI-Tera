@@ -25,7 +25,6 @@ import com.arm.aichat.gguf.GgufMetadataReader
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -380,6 +379,76 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Streams one generation pass into a fresh assistant bubble and returns the final,
+     * full response text -- factored out so both the initial turn and a model-initiated
+     * TOOL: follow-up (see executeToolByName) can reuse the same streaming/UI-update logic.
+     */
+    private suspend fun streamGeneration(prompt: String): String {
+        lastAssistantMsg.clear()
+        withContext(Dispatchers.Main) {
+            messages.add(Message(UUID.randomUUID().toString(), "", false))
+            messageAdapter.notifyDataSetChanged()
+        }
+        engine.sendUserPrompt(prompt).collect { token ->
+            withContext(Dispatchers.Main) {
+                val messageCount = messages.size
+                check(messageCount > 0 && !messages[messageCount - 1].isUser)
+                messages.removeAt(messageCount - 1).copy(
+                    content = lastAssistantMsg.append(token).toString()
+                ).let { messages.add(it) }
+                messageAdapter.notifyItemChanged(messages.size - 1)
+            }
+        }
+        return lastAssistantMsg.toString()
+    }
+
+    /**
+     * Dispatches a model-requested TOOL: <name> <query> to the matching Tools.kt function
+     * (or gatherAndroidSpecs for "specs"), mirroring execute_tool_by_name in wiki-chat.cpp.
+     */
+    private fun executeToolByName(name: String, query: String): String? = when (name.lowercase()) {
+        "math" -> Tools.mathFetch(query)
+        "unit" -> Tools.unitFetch(query)
+        "datetime" -> Tools.datetimeFetch(query)
+        // weatherFetch extracts the location via a "weather in/for/at <place>" regex, so a
+        // bare model-provided location needs wrapping first, same fix as the desktop CLI
+        // (observed there: asked for Tokyo, got weather for the requester's IP location instead)
+        "weather" -> Tools.weatherFetch("weather in $query")
+        "news" -> Tools.newsFetch(query)
+        "wiki" -> Tools.wikiFetch(query)?.second
+        "specs" -> gatherAndroidSpecs()
+        else -> null
+    }
+
+    /**
+     * After a generation pass, checks whether the model's entire response was a TOOL:
+     * request instead of an answer; if so, executes it and streams one follow-up
+     * generation with the result. Single follow-up only, same as the desktop CLI --
+     * the follow-up prompt's phrasing steers the model toward answering, not chaining
+     * further tool requests.
+     */
+    private suspend fun handlePotentialToolRequest(response: String) {
+        val (name, query) = Tools.parseToolRequest(response) ?: return
+        val result = executeToolByName(name, query)
+        val followup = if (result != null) {
+            "Tool result for \"$query\": $result\nNow answer the user's original question using this."
+        } else {
+            null
+        }
+        if (followup != null) {
+            streamGeneration(followup)
+        } else {
+            withContext(Dispatchers.Main) {
+                val messageCount = messages.size
+                messages.removeAt(messageCount - 1).copy(
+                    content = "I tried to look that up but couldn't get a result."
+                ).let { messages.add(it) }
+                messageAdapter.notifyItemChanged(messages.size - 1)
+            }
+        }
+    }
+
+    /**
      * Validate and send the user message into [InferenceEngine]
      */
     private fun handleUserInput() {
@@ -404,70 +473,57 @@ class MainActivity : AppCompatActivity() {
         messageAdapter.notifyDataSetChanged()
 
         generationJob = lifecycleScope.launch(Dispatchers.IO) {
-            // Deterministic tools: computed directly and shown as-is, never sent to the
-            // model -- same bypass pattern as math/unit/datetime on the desktop CLI, since
-            // small local models have repeatedly been shown to garble even correct facts
-            // handed to them (see the desktop CLI's commit history for concrete examples)
-            val direct = Tools.quickResponse(userMsg, userName)
-                ?: Tools.mathFetch(userMsg)
-                ?: Tools.unitFetch(userMsg)
-                ?: if (Tools.datetimeIsRequested(userMsg)) Tools.datetimeFetch(userMsg) else null
+            try {
+                // Deterministic tools: computed directly and shown as-is, never sent to the
+                // model -- same bypass pattern as math/unit/datetime on the desktop CLI, since
+                // small local models have repeatedly been shown to garble even correct facts
+                // handed to them (see the desktop CLI's commit history for concrete examples)
+                val direct = Tools.quickResponse(userMsg, userName)
+                    ?: Tools.mathFetch(userMsg)
+                    ?: Tools.unitFetch(userMsg)
+                    ?: if (Tools.datetimeIsRequested(userMsg)) Tools.datetimeFetch(userMsg) else null
 
-            if (direct != null) {
+                if (direct != null) {
+                    withContext(Dispatchers.Main) {
+                        messages.add(Message(UUID.randomUUID().toString(), direct, false))
+                        messageAdapter.notifyDataSetChanged()
+                    }
+                    return@launch
+                }
+
+                // Network tools: fetched context is folded into the prompt actually sent to
+                // the model, which phrases the final answer -- mirrors the desktop CLI's
+                // turn_input augmentation for weather/news/wiki
+                var promptForModel = userMsg
+                when {
+                    Tools.weatherIsRequested(userMsg) -> Tools.weatherFetch(userMsg)?.let { weather ->
+                        promptForModel = "A weather API was just called for this request and returned " +
+                            "real, current data (not something you need to disclaim): $weather. Report " +
+                            "it directly and naturally, with no hedging about data access.\n" +
+                            "User request: $userMsg"
+                    }
+                    Tools.newsIsRequested(userMsg) -> Tools.newsFetch(userMsg)?.let { news ->
+                        promptForModel = "Live news feed just fetched for the user's request (you have " +
+                            "no other way to know these current headlines, so present this list to " +
+                            "them, verbatim titles, as your answer):\n$news\nUser request: $userMsg"
+                    }
+                    else -> Tools.wikiFetch(userMsg)?.let { (title, extract) ->
+                        promptForModel = "Wikipedia summary for \"$title\" (use this to answer, but you " +
+                            "may add your own knowledge too):\n$extract\nUser question: $userMsg"
+                    }
+                }
+
+                // if none of the keyword tools matched this turn, the model may still
+                // request one itself via TOOL: <name> <query> -- e.g. a location-only
+                // follow-up like "I meant Gresham" that lacks the word "weather"
+                val response = streamGeneration(promptForModel)
+                handlePotentialToolRequest(response)
+            } finally {
                 withContext(Dispatchers.Main) {
-                    messages.add(Message(UUID.randomUUID().toString(), direct, false))
-                    messageAdapter.notifyDataSetChanged()
                     userInputEt.isEnabled = true
                     userActionFab.isEnabled = true
                 }
-                return@launch
             }
-
-            // Network tools: fetched context is folded into the prompt actually sent to
-            // the model, which phrases the final answer -- mirrors the desktop CLI's
-            // turn_input augmentation for weather/news/wiki
-            var promptForModel = userMsg
-            when {
-                Tools.weatherIsRequested(userMsg) -> Tools.weatherFetch(userMsg)?.let { weather ->
-                    promptForModel = "A weather API was just called for this request and returned real, " +
-                        "current data (not something you need to disclaim): $weather. Report it directly " +
-                        "and naturally, with no hedging about data access.\nUser request: $userMsg"
-                }
-                Tools.newsIsRequested(userMsg) -> Tools.newsFetch(userMsg)?.let { news ->
-                    promptForModel = "Live news feed just fetched for the user's request (you have no " +
-                        "other way to know these current headlines, so present this list to them, " +
-                        "verbatim titles, as your answer):\n$news\nUser request: $userMsg"
-                }
-                else -> Tools.wikiFetch(userMsg)?.let { (title, extract) ->
-                    promptForModel = "Wikipedia summary for \"$title\" (use this to answer, but you may " +
-                        "add your own knowledge too):\n$extract\nUser question: $userMsg"
-                }
-            }
-
-            lastAssistantMsg.clear()
-            withContext(Dispatchers.Main) {
-                messages.add(Message(UUID.randomUUID().toString(), lastAssistantMsg.toString(), false))
-                messageAdapter.notifyDataSetChanged()
-            }
-
-            engine.sendUserPrompt(promptForModel)
-                .onCompletion {
-                    withContext(Dispatchers.Main) {
-                        userInputEt.isEnabled = true
-                        userActionFab.isEnabled = true
-                    }
-                }.collect { token ->
-                    withContext(Dispatchers.Main) {
-                        val messageCount = messages.size
-                        check(messageCount > 0 && !messages[messageCount - 1].isUser)
-
-                        messages.removeAt(messageCount - 1).copy(
-                            content = lastAssistantMsg.append(token).toString()
-                        ).let { messages.add(it) }
-
-                        messageAdapter.notifyItemChanged(messages.size - 1)
-                    }
-                }
         }
     }
 
@@ -530,22 +586,52 @@ class MainActivity : AppCompatActivity() {
         private const val BENCH_SEQUENCE = 1
         private const val BENCH_REPETITION = 3
 
-        // Trimmed mobile version of BYTE_SYSTEM_PROMPT from the desktop CLI's wiki-chat.cpp.
-        // Math/unit/datetime/quick-replies are computed in Kotlin (Tools.kt) and shown
-        // directly, bypassing the model entirely, same as the desktop CLI -- so this prompt
-        // doesn't need to mention them. Weather/news/wiki results are instead folded into
-        // the actual prompt sent to the model when relevant (see handleUserInput()), so the
-        // model just needs to know it can trust context handed to it that way.
+        // A more direct port of BYTE_SYSTEM_PROMPT from the desktop CLI's wiki-chat.cpp --
+        // full module description + the TOOL: protocol (adapted to Android's actual tool
+        // set: math/unit/datetime/weather/news/wiki/specs, no session/knowledge-base/
+        // scheduling features since those aren't ported yet) + the strengthened "if
+        // you're unsure, don't guess" paragraph, all ported essentially verbatim since a
+        // trimmed prompt was found to let the model fall back to its default "I don't have
+        // real-time access" refusal on follow-up turns the keyword routing didn't catch.
         private const val BYTE_SYSTEM_PROMPT =
-            "You are Byte, an AI assistant (Byte AI, Android). If you are not confident in a " +
-                "factual answer -- a specific name, date, number, or anything you'd be guessing " +
-                "at -- say so plainly rather than stating an uncertain guess as if it were fact. " +
-                "Being wrong with confidence is worse than admitting uncertainty. If a message " +
-                "includes fetched weather data, a news feed, or a Wikipedia summary as context, " +
-                "that's real data just retrieved for this request -- report it directly and " +
-                "naturally, with no hedging about lacking real-time or lookup access. Answer " +
-                "naturally and concisely. Here is your current device's platform/hardware info -- " +
-                "state it directly if asked, don't guess or omit parts of it:"
+            "You are Byte, an AI assistant (Byte AI 4.0 \"Tera\", Android). You are made up of " +
+                "several tools working together, and you should describe yourself accurately " +
+                "using them when asked what you can do:\n" +
+                "- Live knowledge tools: a Wikipedia lookup, a HackerNews/Dev.to news feed, and " +
+                "live weather data. Their results are supplementary context, filling gaps in or " +
+                "checking facts against what you already know, never overriding your own judgment.\n" +
+                "- Exact-computation tools: a calculator, a unit converter (length, weight, " +
+                "volume, speed, temperature), and the current date/time (including US timezone " +
+                "conversions). Their results are direct facts computed for you, so state them as " +
+                "given rather than recomputing them yourself.\n" +
+                "- A specs tool: real hardware/platform info for the device you're running on, " +
+                "already given to you below.\n" +
+                "\n" +
+                "Most of the time a relevant tool's result is already given to you above, if one " +
+                "applies. But if you genuinely need one of: wiki, news, weather, math, unit, " +
+                "datetime, specs -- and none was already provided -- you may request it yourself. " +
+                "To do that, reply with ONLY this exact line and nothing else: " +
+                "TOOL: <name> <query>  (e.g. \"TOOL: weather Tokyo\", \"TOOL: wiki Eiffel Tower\"). " +
+                "The wiki tool in particular is a real, working Wikipedia lookup you have direct " +
+                "access to -- use it whenever a question is about a specific real-world person, " +
+                "place, thing, or event and no Wikipedia context was already given to you, rather " +
+                "than answering from memory alone or declining to answer. Do not say you lack " +
+                "real-time or lookup access when a tool is available to you; request it instead. " +
+                "Only do this when you truly cannot answer without it; never combine it with other " +
+                "text, and never output more than one TOOL: line in a single response -- only the " +
+                "first is ever used. If you are instead just describing or listing what tools you " +
+                "have (e.g. someone asks \"what can you do\"), describe them in plain prose -- the " +
+                "TOOL: syntax is only for actually invoking one, never for listing them.\n" +
+                "\n" +
+                "If you are not confident in a factual answer -- a specific name, date, number, " +
+                "fact about a real person/place/thing/event, or anything you'd be guessing at -- " +
+                "look it up with the appropriate tool before answering, rather than stating an " +
+                "uncertain guess as if it were fact. Being wrong with confidence is worse than " +
+                "taking one extra step to check. This applies especially to wiki for real-world " +
+                "entities and news/weather for anything current. Only skip the lookup when you are " +
+                "genuinely certain, or when a tool's result was already given to you above.\n" +
+                "Answer naturally and concisely. Here is your current device's platform/hardware " +
+                "info -- state it directly if asked, don't guess or omit parts of it:"
     }
 }
 

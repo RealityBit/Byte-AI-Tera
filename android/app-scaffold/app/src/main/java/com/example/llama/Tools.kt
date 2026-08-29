@@ -363,6 +363,29 @@ object Tools {
         return sentences
     }
 
+    // ---- model-initiated tool calling ------------------------------------
+    // port of parse_tool_request/the TOOL: protocol from wiki-chat.cpp: lets
+    // the model request a tool itself on turns the per-message keyword
+    // routing didn't already catch (e.g. a location-only follow-up like
+    // "I meant Gresham" that doesn't contain the word "weather")
+
+    /**
+     * Parses a model-initiated tool request, only when the model's ENTIRE
+     * trimmed response is exactly "TOOL: <name> <query>" -- requiring the
+     * whole response to match avoids false positives from the phrase turning
+     * up inside ordinary prose. Only the first line is taken as the query,
+     * even if the model kept generating past the "TOOL: ..." line instead of
+     * stopping there as instructed (same defensive fix as the desktop CLI).
+     */
+    fun parseToolRequest(response: String): Pair<String, String>? {
+        val trimmed = response.trim()
+        if (!trimmed.startsWith("TOOL:")) return null
+        val rest = trimmed.removePrefix("TOOL:").trim().substringBefore('\n').trim()
+        val sep = rest.indexOf(' ')
+        if (sep < 0) return null
+        return rest.substring(0, sep) to rest.substring(sep + 1)
+    }
+
     fun wikiFetch(query: String): Pair<String, String>? {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val body = httpGet(
