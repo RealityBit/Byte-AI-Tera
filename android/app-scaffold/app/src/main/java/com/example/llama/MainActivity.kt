@@ -54,6 +54,7 @@ class MainActivity : AppCompatActivity() {
 
     // Conversation states
     private var isModelReady = false
+    private var loadedModelInfo = "No model loaded."
     private val messages = mutableListOf<Message>()
     private val lastAssistantMsg = StringBuilder()
     private val messageAdapter = MessageAdapter(messages) { userName }
@@ -157,7 +158,8 @@ class MainActivity : AppCompatActivity() {
                 "Available here:\n" +
                     "- Chat with Byte, powered by your loaded GGUF model\n" +
                     "- Pick a local GGUF file, or download Byte's own model from GitHub\n" +
-                    "- Set your name and clear the chat (gear menu)\n\n" +
+                    "- Set your name and clear the chat (gear menu)\n" +
+                    "- Type /model in chat to see the loaded model's info\n\n" +
                     "Not yet ported from the desktop CLI: Wikipedia/news/weather lookups, " +
                     "math/unit/datetime tools, saved conversations, scheduling, and cross-session " +
                     "memory. See the project's android/README.md for what's planned."
@@ -203,6 +205,8 @@ class MainActivity : AppCompatActivity() {
 
                     withContext(Dispatchers.Main) {
                         isModelReady = true
+                        loadedModelInfo = "Byte AI -- $modelName (local file)\n\n$metadata"
+                        ggufTv.visibility = android.view.View.GONE
                         userInputEt.hint = "Type and send a message!"
                         userInputEt.isEnabled = true
                         userActionFab.setImageResource(R.drawable.outline_send_24)
@@ -295,7 +299,8 @@ class MainActivity : AppCompatActivity() {
             loadModel(outputFile.name, outputFile)
             withContext(Dispatchers.Main) {
                 isModelReady = true
-                ggufTv.text = "Byte AI -- ${outputFile.name} (downloaded from GitHub)"
+                loadedModelInfo = "Byte AI -- ${outputFile.name} (downloaded from GitHub)"
+                ggufTv.visibility = android.view.View.GONE
                 userInputEt.hint = "Type and send a message!"
                 userInputEt.isEnabled = true
                 userActionFab.setImageResource(R.drawable.outline_send_24)
@@ -377,6 +382,12 @@ class MainActivity : AppCompatActivity() {
         userInputEt.text.toString().also { userMsg ->
             if (userMsg.isEmpty()) {
                 Toast.makeText(this, "Input message is empty!", Toast.LENGTH_SHORT).show()
+            } else if (userMsg.trim().equals("/model", ignoreCase = true)) {
+                // Mirrors the desktop CLI's /model -- answered directly, never sent to the model
+                userInputEt.text = null
+                messages.add(Message(UUID.randomUUID().toString(), userMsg, true))
+                messages.add(Message(UUID.randomUUID().toString(), loadedModelInfo, false))
+                messageAdapter.notifyDataSetChanged()
             } else {
                 userInputEt.text = null
                 userInputEt.isEnabled = false
