@@ -13,7 +13,10 @@ data class Message(
 )
 
 class MessageAdapter(
-    private val messages: List<Message>
+    private val messages: List<Message>,
+    // read live rather than captured once, so a name set mid-session applies retroactively
+    // to already-rendered bubbles too, without needing to rebuild the adapter
+    private val userDisplayName: () -> String = { "You" }
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
@@ -41,6 +44,10 @@ class MessageAdapter(
         if (holder is UserMessageViewHolder || holder is AssistantMessageViewHolder) {
             val textView = holder.itemView.findViewById<TextView>(R.id.msg_content)
             textView.text = message.content
+        }
+        if (holder is UserMessageViewHolder) {
+            val name = userDisplayName().ifBlank { "You" }
+            holder.itemView.findViewById<TextView>(R.id.sender_label).text = name
         }
     }
 

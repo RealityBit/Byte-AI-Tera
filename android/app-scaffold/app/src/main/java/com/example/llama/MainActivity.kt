@@ -1,12 +1,14 @@
 package com.example.llama
 
 import android.app.ActivityManager
+import android.app.AlertDialog
 import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.addCallback
@@ -44,6 +46,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var userInputEt: EditText
     private lateinit var userActionFab: FloatingActionButton
     private lateinit var downloadFab: FloatingActionButton
+    private lateinit var settingsIv: ImageView
 
     // Arm AI Chat inference engine
     private lateinit var engine: InferenceEngine
@@ -53,7 +56,14 @@ class MainActivity : AppCompatActivity() {
     private var isModelReady = false
     private val messages = mutableListOf<Message>()
     private val lastAssistantMsg = StringBuilder()
-    private val messageAdapter = MessageAdapter(messages)
+    private val messageAdapter = MessageAdapter(messages) { userName }
+
+    // Persisted across launches in SharedPreferences, mirroring /user <name> in the desktop CLI
+    // (see save_config_field/load_config_user_name in wiki-chat.cpp)
+    private var userName: String
+        get() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_KEY_USER_NAME, "") ?: ""
+        set(value) = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putString(PREF_KEY_USER_NAME, value).apply()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,6 +80,8 @@ class MainActivity : AppCompatActivity() {
         userInputEt = findViewById(R.id.user_input)
         userActionFab = findViewById(R.id.fab)
         downloadFab = findViewById(R.id.download_fab)
+        settingsIv = findViewById(R.id.settings_iv)
+        settingsIv.setOnClickListener { showSettingsMenu() }
 
         // Arm AI Chat initialization
         lifecycleScope.launch(Dispatchers.Default) {
@@ -94,6 +106,64 @@ class MainActivity : AppCompatActivity() {
             userActionFab.isEnabled = false
             lifecycleScope.launch(Dispatchers.IO) { downloadByteModel() }
         }
+    }
+
+    /**
+     * The gear icon's menu: set your display name, clear the current chat, or see what's
+     * actually available on this Android build (most of the desktop CLI's tool modules --
+     * wiki/news/weather/math/etc -- aren't ported yet, see android/README.md).
+     */
+    private fun showSettingsMenu() {
+        val options = arrayOf("Set your name", "Clear chat", "Help / what's available")
+        AlertDialog.Builder(this)
+            .setTitle("Byte AI settings")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showSetNameDialog()
+                    1 -> clearChat()
+                    2 -> showHelpDialog()
+                }
+            }
+            .show()
+    }
+
+    private fun showSetNameDialog() {
+        val input = EditText(this).apply {
+            hint = "Your name"
+            setText(userName)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("What should Byte call you?")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                userName = input.text.toString().trim()
+                messageAdapter.notifyDataSetChanged()
+                Toast.makeText(this, "Saved -- Byte will call you \"$userName\"", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun clearChat() {
+        messages.clear()
+        lastAssistantMsg.clear()
+        messageAdapter.notifyDataSetChanged()
+    }
+
+    private fun showHelpDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Byte AI 4.0 \"Tera\" -- Android")
+            .setMessage(
+                "Available here:\n" +
+                    "- Chat with Byte, powered by your loaded GGUF model\n" +
+                    "- Pick a local GGUF file, or download Byte's own model from GitHub\n" +
+                    "- Set your name and clear the chat (gear menu)\n\n" +
+                    "Not yet ported from the desktop CLI: Wikipedia/news/weather lookups, " +
+                    "math/unit/datetime tools, saved conversations, scheduling, and cross-session " +
+                    "memory. See the project's android/README.md for what's planned."
+            )
+            .setPositiveButton("Got it", null)
+            .show()
     }
 
     private val getContent = registerForActivityResult(
@@ -274,7 +344,11 @@ class MainActivity : AppCompatActivity() {
             }
             engine.loadModel(modelFile.path)
             Log.i(TAG, "Sending Byte system prompt...")
-            engine.setSystemPrompt(BYTE_SYSTEM_PROMPT + gatherAndroidSpecs())
+            var prompt = BYTE_SYSTEM_PROMPT + gatherAndroidSpecs()
+            if (userName.isNotBlank()) {
+                prompt += "\nThe user you're talking to is named $userName; address them by name naturally."
+            }
+            engine.setSystemPrompt(prompt)
         }
 
     /**
@@ -384,6 +458,9 @@ class MainActivity : AppCompatActivity() {
 
         private const val DIRECTORY_MODELS = "models"
         private const val FILE_EXTENSION_GGUF = ".gguf"
+
+        private const val PREFS_NAME = "byte_prefs"
+        private const val PREF_KEY_USER_NAME = "user_name"
 
         private const val MANIFEST_URL =
             "https://raw.githubusercontent.com/RetroGigabyte/Byte-AI-Models/main/manifest.json"
