@@ -159,10 +159,14 @@ class MainActivity : AppCompatActivity() {
                     "- Chat with Byte, powered by your loaded GGUF model\n" +
                     "- Pick a local GGUF file, or download Byte's own model from GitHub\n" +
                     "- Set your name and clear the chat (gear menu)\n" +
-                    "- Type /model in chat to see the loaded model's info\n\n" +
-                    "Not yet ported from the desktop CLI: Wikipedia/news/weather lookups, " +
-                    "math/unit/datetime tools, saved conversations, scheduling, and cross-session " +
-                    "memory. See the project's android/README.md for what's planned."
+                    "- Type /model in chat to see the loaded model's info\n" +
+                    "- Math (\"2+3\", \"10 times 5\") and unit conversion (\"10km in miles\")\n" +
+                    "- Current date/time, including US timezones (\"what time is it in pacific?\")\n" +
+                    "- Live weather (\"weather in Tokyo\"), HackerNews/Dev.to (\"hackernews\"), " +
+                    "and Wikipedia lookups for real-world questions\n\n" +
+                    "Not yet ported from the desktop CLI: saved/named conversations, /forget, " +
+                    "scheduling, and cross-session memory search. See the project's " +
+                    "android/README.md for what's planned."
             )
             .setPositiveButton("Got it", null)
             .show()
@@ -379,46 +383,91 @@ class MainActivity : AppCompatActivity() {
      * Validate and send the user message into [InferenceEngine]
      */
     private fun handleUserInput() {
-        userInputEt.text.toString().also { userMsg ->
-            if (userMsg.isEmpty()) {
-                Toast.makeText(this, "Input message is empty!", Toast.LENGTH_SHORT).show()
-            } else if (userMsg.trim().equals("/model", ignoreCase = true)) {
-                // Mirrors the desktop CLI's /model -- answered directly, never sent to the model
-                userInputEt.text = null
-                messages.add(Message(UUID.randomUUID().toString(), userMsg, true))
-                messages.add(Message(UUID.randomUUID().toString(), loadedModelInfo, false))
-                messageAdapter.notifyDataSetChanged()
-            } else {
-                userInputEt.text = null
-                userInputEt.isEnabled = false
-                userActionFab.isEnabled = false
+        val userMsg = userInputEt.text.toString()
+        if (userMsg.isEmpty()) {
+            Toast.makeText(this, "Input message is empty!", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (userMsg.trim().equals("/model", ignoreCase = true)) {
+            // Mirrors the desktop CLI's /model -- answered directly, never sent to the model
+            userInputEt.text = null
+            messages.add(Message(UUID.randomUUID().toString(), userMsg, true))
+            messages.add(Message(UUID.randomUUID().toString(), loadedModelInfo, false))
+            messageAdapter.notifyDataSetChanged()
+            return
+        }
 
-                // Update message states
-                messages.add(Message(UUID.randomUUID().toString(), userMsg, true))
-                lastAssistantMsg.clear()
-                messages.add(Message(UUID.randomUUID().toString(), lastAssistantMsg.toString(), false))
+        userInputEt.text = null
+        userInputEt.isEnabled = false
+        userActionFab.isEnabled = false
+        messages.add(Message(UUID.randomUUID().toString(), userMsg, true))
+        messageAdapter.notifyDataSetChanged()
 
-                generationJob = lifecycleScope.launch(Dispatchers.Default) {
-                    engine.sendUserPrompt(userMsg)
-                        .onCompletion {
-                            withContext(Dispatchers.Main) {
-                                userInputEt.isEnabled = true
-                                userActionFab.isEnabled = true
-                            }
-                        }.collect { token ->
-                            withContext(Dispatchers.Main) {
-                                val messageCount = messages.size
-                                check(messageCount > 0 && !messages[messageCount - 1].isUser)
+        generationJob = lifecycleScope.launch(Dispatchers.IO) {
+            // Deterministic tools: computed directly and shown as-is, never sent to the
+            // model -- same bypass pattern as math/unit/datetime on the desktop CLI, since
+            // small local models have repeatedly been shown to garble even correct facts
+            // handed to them (see the desktop CLI's commit history for concrete examples)
+            val direct = Tools.quickResponse(userMsg, userName)
+                ?: Tools.mathFetch(userMsg)
+                ?: Tools.unitFetch(userMsg)
+                ?: if (Tools.datetimeIsRequested(userMsg)) Tools.datetimeFetch(userMsg) else null
 
-                                messages.removeAt(messageCount - 1).copy(
-                                    content = lastAssistantMsg.append(token).toString()
-                                ).let { messages.add(it) }
+            if (direct != null) {
+                withContext(Dispatchers.Main) {
+                    messages.add(Message(UUID.randomUUID().toString(), direct, false))
+                    messageAdapter.notifyDataSetChanged()
+                    userInputEt.isEnabled = true
+                    userActionFab.isEnabled = true
+                }
+                return@launch
+            }
 
-                                messageAdapter.notifyItemChanged(messages.size - 1)
-                            }
-                        }
+            // Network tools: fetched context is folded into the prompt actually sent to
+            // the model, which phrases the final answer -- mirrors the desktop CLI's
+            // turn_input augmentation for weather/news/wiki
+            var promptForModel = userMsg
+            when {
+                Tools.weatherIsRequested(userMsg) -> Tools.weatherFetch(userMsg)?.let { weather ->
+                    promptForModel = "A weather API was just called for this request and returned real, " +
+                        "current data (not something you need to disclaim): $weather. Report it directly " +
+                        "and naturally, with no hedging about data access.\nUser request: $userMsg"
+                }
+                Tools.newsIsRequested(userMsg) -> Tools.newsFetch(userMsg)?.let { news ->
+                    promptForModel = "Live news feed just fetched for the user's request (you have no " +
+                        "other way to know these current headlines, so present this list to them, " +
+                        "verbatim titles, as your answer):\n$news\nUser request: $userMsg"
+                }
+                else -> Tools.wikiFetch(userMsg)?.let { (title, extract) ->
+                    promptForModel = "Wikipedia summary for \"$title\" (use this to answer, but you may " +
+                        "add your own knowledge too):\n$extract\nUser question: $userMsg"
                 }
             }
+
+            lastAssistantMsg.clear()
+            withContext(Dispatchers.Main) {
+                messages.add(Message(UUID.randomUUID().toString(), lastAssistantMsg.toString(), false))
+                messageAdapter.notifyDataSetChanged()
+            }
+
+            engine.sendUserPrompt(promptForModel)
+                .onCompletion {
+                    withContext(Dispatchers.Main) {
+                        userInputEt.isEnabled = true
+                        userActionFab.isEnabled = true
+                    }
+                }.collect { token ->
+                    withContext(Dispatchers.Main) {
+                        val messageCount = messages.size
+                        check(messageCount > 0 && !messages[messageCount - 1].isUser)
+
+                        messages.removeAt(messageCount - 1).copy(
+                            content = lastAssistantMsg.append(token).toString()
+                        ).let { messages.add(it) }
+
+                        messageAdapter.notifyItemChanged(messages.size - 1)
+                    }
+                }
         }
     }
 
@@ -481,17 +530,22 @@ class MainActivity : AppCompatActivity() {
         private const val BENCH_SEQUENCE = 1
         private const val BENCH_REPETITION = 3
 
-        // Trimmed mobile version of BYTE_SYSTEM_PROMPT from the desktop CLI's wiki-chat.cpp --
-        // no tool-calling protocol here yet, since none of the desktop's live-knowledge/
-        // exact-computation modules have an Android port (see android/README.md). Real device
-        // specs are appended by gatherAndroidSpecs() after this.
+        // Trimmed mobile version of BYTE_SYSTEM_PROMPT from the desktop CLI's wiki-chat.cpp.
+        // Math/unit/datetime/quick-replies are computed in Kotlin (Tools.kt) and shown
+        // directly, bypassing the model entirely, same as the desktop CLI -- so this prompt
+        // doesn't need to mention them. Weather/news/wiki results are instead folded into
+        // the actual prompt sent to the model when relevant (see handleUserInput()), so the
+        // model just needs to know it can trust context handed to it that way.
         private const val BYTE_SYSTEM_PROMPT =
             "You are Byte, an AI assistant (Byte AI, Android). If you are not confident in a " +
                 "factual answer -- a specific name, date, number, or anything you'd be guessing " +
                 "at -- say so plainly rather than stating an uncertain guess as if it were fact. " +
-                "Being wrong with confidence is worse than admitting uncertainty. Answer naturally " +
-                "and concisely. Here is your current device's platform/hardware info -- state it " +
-                "directly if asked, don't guess or omit parts of it:"
+                "Being wrong with confidence is worse than admitting uncertainty. If a message " +
+                "includes fetched weather data, a news feed, or a Wikipedia summary as context, " +
+                "that's real data just retrieved for this request -- report it directly and " +
+                "naturally, with no hedging about lacking real-time or lookup access. Answer " +
+                "naturally and concisely. Here is your current device's platform/hardware info -- " +
+                "state it directly if asked, don't guess or omit parts of it:"
     }
 }
 

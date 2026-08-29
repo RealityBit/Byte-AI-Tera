@@ -61,6 +61,27 @@ sha256-verified approach as the desktop CLI's `/downloadmodel` (`modules/model_f
 in Kotlin with `HttpURLConnection` + `RandomAccessFile` rather than adding a new HTTP dependency. Requires
 the `INTERNET` permission, now declared in `AndroidManifest.xml`.
 
+## Ported tool modules
+
+`Tools.kt` is a pure-Kotlin port of six of the desktop CLI's `modules/*.cpp` files -- no native/JNI changes,
+same `HttpURLConnection` approach as the model downloader:
+- **math_fetch, unit_fetch, quick_response**: computed directly and shown as-is, bypassing the model
+  entirely, same as the desktop CLI's philosophy that small local models can't be trusted to relay even
+  correct facts faithfully.
+- **datetime_fetch**: reimplemented with `java.time`/real IANA timezones instead of porting the desktop's
+  manual UTC-offset/DST bookkeeping -- `java.time` already handles DST correctly on its own.
+- **weather_fetch, news_fetch, wiki_fetch**: fetched context is folded into the actual prompt sent to the
+  model (mirroring the desktop's `turn_input` augmentation), so the model phrases the final answer using
+  real fetched data rather than guessing.
+
+All wired into `handleUserInput()` in `MainActivity.kt`, keyword-routed the same way as the desktop CLI's
+interactive loop (deterministic tools checked first, then weather/news, then a Wikipedia fallback for
+anything else that isn't a quick chitchat reply). `/model` is also implemented (typed in chat, intercepted
+before it ever reaches the model, matching the desktop CLI's `/model`).
+
+No local disk cache for Wikipedia lookups yet (the desktop CLI caches to `~/Byte/wiki-chat-cache.json`) --
+every lookup on Android is a fresh network call.
+
 ## What still needs real work (not started)
 
 - `app-scaffold/lib`'s JNI layer needs the model wired to Byte's actual GGUF (currently generic
@@ -68,16 +89,18 @@ the `INTERNET` permission, now declared in `AndroidManifest.xml`.
 - The Kotlin package name / applicationId is still the generic `com.example.llama` /
   `com.arm.aichat` from the sample -- not renamed yet since that touches more files and couldn't be
   verified without a build.
-- Everything in `Byte-AI-Tera`'s desktop modules that assumes desktop POSIX paths or shells out to a CLI
-  tool needs an Android-native equivalent, built separately rather than assumed to just recompile:
+- Features that need real Android-specific infrastructure, not just a Kotlin rewrite:
   - `modules/scheduler.cpp` (crontab) -> `WorkManager`/`AlarmManager`
-  - `modules/memory_store`, `category_fetch`, `wiki_fetch`, `training_log` -> Android sandboxed storage,
-    JNI/NDK wiring for SQLite3/libcurl
+  - `modules/memory_store`, `category_fetch`, `training_log` (cross-session memory search, the curated
+    knowledge base, and the training-corpus log) -> Android sandboxed storage; memory_store in particular
+    used SQLite FTS5 on desktop and would need Android's built-in SQLite (or Room) for a real port
+  - Saved/named conversations (`/save`, `/load`, `/namechat`, `/history`, `/delchat`), `/forget`
   - The `fastfetch`-backed `/specs` (see main `wiki-chat.cpp`) has no Android equivalent to shell out to;
-    needs a native Android hardware-info source (`android.os.Build`, `ActivityManager.MemoryInfo`, etc.)
+    Android's specs are already gathered natively via `gatherAndroidSpecs()` in `MainActivity.kt` instead
   - Platform self-detection: bare `uname()` reports "Linux" on Android same as a Linux desktop (Android
     runs the Linux kernel) -- needs something Android-specific (e.g. checking for `/system/build.prop`, or
-    just hardcoding it since a dedicated Android build already knows what it is).
+    just hardcoding it since a dedicated Android build already knows what it is). Not relevant to the
+    Kotlin app itself since it never calls `uname()` -- only matters if native code ever needs it.
 - The APK builds but hasn't been installed/run on a real device or emulator yet (no emulator available in
   the environment it was built in) -- next real step is side-loading the debug APK onto an actual arm64-v8a
   device (a Galaxy S26 Ultra is the intended first test device) to confirm it actually launches and chats.
