@@ -23,6 +23,10 @@
 -keep class com.arm.aichat.* { *; }
 -keep class com.arm.aichat.gguf.* { *; }
 
+# pdfbox-android's JPXFilter optionally uses com.gemalto.jp2.JP2Decoder for JPEG2000 images,
+# a dependency it doesn't bundle -- we don't need JPEG2000 support, only plain text extraction
+-dontwarn com.gemalto.jp2.**
+
 -assumenosideeffects class android.util.Log {
     public static int v(...);
     public static int d(...);

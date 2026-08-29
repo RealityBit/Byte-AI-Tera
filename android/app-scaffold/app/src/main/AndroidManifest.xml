@@ -1,7 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets Byte's model live in a real, user-visible Byte/models/ folder in shared storage
+         (mirroring ~/Byte/models/ on the desktop CLI) instead of the app's private sandbox,
+         which is wiped on uninstall. Requested via Settings, not a runtime dialog: see
+         requestAllFilesAccessIfNeeded() in MainActivity.kt. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
 
     <application
         android:allowBackup="true"

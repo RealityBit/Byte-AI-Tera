@@ -82,6 +82,38 @@ before it ever reaches the model, matching the desktop CLI's `/model`).
 No local disk cache for Wikipedia lookups yet (the desktop CLI caches to `~/Byte/wiki-chat-cache.json`) --
 every lookup on Android is a fresh network call.
 
+## Model storage, document attach, sampler fix
+
+The downloaded/picked model now lives in `Byte/models/` under shared storage (mirroring `~/Byte/models/`
+on the desktop CLI) rather than the app's private sandbox, which is wiped on uninstall. This needs
+`MANAGE_EXTERNAL_STORAGE` ("All files access"), since a fixed conventional path outside the app's own
+folder isn't reachable via scoped-storage APIs like SAF/MediaStore -- `promptForStorageAccessIfNeeded()` in
+`MainActivity.kt` sends the user to the dedicated system settings screen the first time they try to
+download or pick a model, falling back to internal storage if not granted so the app still works before
+they grant it.
+
+PDF and Word (`.docx`) document attach: a paperclip button (visible once a model is loaded) picks a file
+via `ACTION_OPEN_DOCUMENT`, extracts its text (`DocumentExtract.kt`), and feeds it into the model's
+context as a turn. PDFs use `com.tom-roush:pdfbox-android` (a real Android port of Apache PDFBox); `.docx`
+is parsed with zero extra dependencies since it's just a ZIP of XML -- `java.util.zip.ZipInputStream` +
+Android's built-in `XmlPullParser` against `word/document.xml`. No desktop CLI equivalent; Android-only.
+(One real build gotcha: pdfbox-android's JPXFilter optionally references `com.gemalto.jp2.JP2Decoder` for
+JPEG2000 images, which isn't bundled -- R8 treats that as a hard error unless suppressed with
+`-dontwarn com.gemalto.jp2.**` in `proguard-rules.pro`, since we only need plain text extraction anyway.)
+
+The native sampler (`ai_chat.cpp`, the one native-code change made so far in this whole port -- everything
+else has been pure Kotlin) originally used `DEFAULT_SAMPLER_TEMP = 0.3f` with no repetition penalty at all
+(`penalty_repeat` defaults to `1.0f`/disabled in `common_params_sampling`), unlike the desktop CLI's
+validated-working `temp=0.8f, penalty_repeat=1.1f, penalty_last_n=256`. This was observed live producing
+short, prematurely-truncated replies to terse prompts (a one-word "good" cutting off mid-sentence).
+`new_sampler()` now matches the desktop CLI's tuned values.
+
+Also fixed: the model was over-eagerly emitting `TOOL: wiki ...` requests for simple statements the user
+made about themselves (e.g. "I'm using a Galaxy S26 Ultra" isn't a question, nothing needs looking up) --
+tightened in `BYTE_SYSTEM_PROMPT`. And a failed tool lookup no longer dead-ends in a canned "I tried to
+look that up but couldn't get a result" -- the follow-up now asks the model to just answer normally
+without the tool instead.
+
 ## What still needs real work (not started)
 
 - `app-scaffold/lib`'s JNI layer needs the model wired to Byte's actual GGUF (currently generic
@@ -101,6 +133,5 @@ every lookup on Android is a fresh network call.
     runs the Linux kernel) -- needs something Android-specific (e.g. checking for `/system/build.prop`, or
     just hardcoding it since a dedicated Android build already knows what it is). Not relevant to the
     Kotlin app itself since it never calls `uname()` -- only matters if native code ever needs it.
-- The APK builds but hasn't been installed/run on a real device or emulator yet (no emulator available in
-  the environment it was built in) -- next real step is side-loading the debug APK onto an actual arm64-v8a
-  device (a Galaxy S26 Ultra is the intended first test device) to confirm it actually launches and chats.
+- Verified running on a real device (Galaxy S26 Ultra, side-loaded) -- chats, tool routing, /model, units,
+  document attach, and the storage-permission flow have all been exercised live, not just build-verified.

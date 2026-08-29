@@ -31,7 +31,15 @@ constexpr int   N_THREADS_HEADROOM      = 2;
 constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;
 constexpr int   OVERFLOW_HEADROOM       = 4;
 constexpr int   BATCH_SIZE              = 512;
-constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
+// Matches the desktop CLI's tuned sampler (wiki-chat.cpp) rather than this sample's original
+// 0.3f -- that was unusually cold (llama.cpp's own common_params_sampling default is 0.80f)
+// and, combined with no repetition penalty at all (penalty_repeat defaults to 1.0f/disabled),
+// was observed producing short, prematurely-truncated replies to terse prompts (e.g. a
+// one-word "good" cutting off mid-sentence). penalty_repeat/penalty_last_n below are set to
+// match wiki-chat.cpp's validated-working values in new_sampler().
+constexpr float DEFAULT_SAMPLER_TEMP    = 0.8f;
+constexpr float DEFAULT_PENALTY_REPEAT  = 1.1f;
+constexpr int   DEFAULT_PENALTY_LAST_N  = 256;
 
 static llama_model                      * g_model;
 static llama_context                    * g_context;
@@ -107,6 +115,8 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
 static common_sampler *new_sampler(float temp) {
     common_params_sampling sparams;
     sparams.temp = temp;
+    sparams.penalty_repeat = DEFAULT_PENALTY_REPEAT;
+    sparams.penalty_last_n = DEFAULT_PENALTY_LAST_N;
     return common_sampler_init(g_model, sparams);
 }
 

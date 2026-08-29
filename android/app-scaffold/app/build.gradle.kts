@@ -49,6 +49,7 @@ android {
 dependencies {
     implementation(libs.bundles.androidx)
     implementation(libs.material)
+    implementation(libs.pdfbox.android)
 
     implementation(project(":lib"))
 

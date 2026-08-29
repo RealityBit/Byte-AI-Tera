@@ -3,9 +3,12 @@ package com.example.llama
 import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.util.Log
 import android.widget.EditText
 import android.widget.ImageView
@@ -45,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var userInputEt: EditText
     private lateinit var userActionFab: FloatingActionButton
     private lateinit var downloadFab: FloatingActionButton
+    private lateinit var attachFab: FloatingActionButton
     private lateinit var settingsIv: ImageView
 
     // Arm AI Chat inference engine
@@ -92,8 +96,17 @@ class MainActivity : AppCompatActivity() {
         userInputEt = findViewById(R.id.user_input)
         userActionFab = findViewById(R.id.fab)
         downloadFab = findViewById(R.id.download_fab)
+        attachFab = findViewById(R.id.attach_fab)
         settingsIv = findViewById(R.id.settings_iv)
         settingsIv.setOnClickListener { showSettingsMenu() }
+        attachFab.setOnClickListener {
+            getDocumentContent.launch(
+                arrayOf(
+                    "application/pdf",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            )
+        }
 
         // Arm AI Chat initialization
         lifecycleScope.launch(Dispatchers.Default) {
@@ -105,7 +118,7 @@ class MainActivity : AppCompatActivity() {
             if (isModelReady) {
                 // If model is ready, validate input and send to engine
                 handleUserInput()
-            } else {
+            } else if (promptForStorageAccessIfNeeded()) {
                 // Otherwise, prompt user to select a GGUF metadata on the device
                 getContent.launch(arrayOf("*/*"))
             }
@@ -114,10 +127,32 @@ class MainActivity : AppCompatActivity() {
         // Downloads Byte's own model straight from Byte-AI-Models on GitHub, as an
         // alternative to picking a local file
         downloadFab.setOnClickListener {
-            downloadFab.isEnabled = false
-            userActionFab.isEnabled = false
-            lifecycleScope.launch(Dispatchers.IO) { downloadByteModel() }
+            if (promptForStorageAccessIfNeeded()) {
+                downloadFab.isEnabled = false
+                userActionFab.isEnabled = false
+                lifecycleScope.launch(Dispatchers.IO) { downloadByteModel() }
+            }
         }
+    }
+
+    /**
+     * If "All files access" hasn't been granted yet, sends the user to the system settings
+     * screen to grant it and explains why, then returns false so the caller holds off on
+     * downloading/picking a model until they've granted it and tapped again -- otherwise the
+     * model would silently land in the app's private storage (ensureModelsDirectory()'s
+     * fallback) and Retro would never realize the permanent Byte/models/ location was
+     * available. Returns true immediately once already granted.
+     */
+    private fun promptForStorageAccessIfNeeded(): Boolean {
+        if (Environment.isExternalStorageManager()) return true
+        Toast.makeText(
+            this,
+            "Grant \"All files access\" so Byte's model is stored in Byte/models (survives app " +
+                "reinstalls) instead of being deleted with the app. Then tap again.",
+            Toast.LENGTH_LONG
+        ).show()
+        requestAllFilesAccessIfNeeded()
+        return false
     }
 
     /**
@@ -211,7 +246,9 @@ class MainActivity : AppCompatActivity() {
                     "- Math (\"2+3\", \"10 times 5\") and unit conversion (\"10km in miles\")\n" +
                     "- Current date/time, including US timezones (\"what time is it in pacific?\")\n" +
                     "- Live weather (\"weather in Tokyo\"), HackerNews/Dev.to (\"hackernews\"), " +
-                    "and Wikipedia lookups for real-world questions\n\n" +
+                    "and Wikipedia lookups for real-world questions\n" +
+                    "- Attach a PDF or Word document (paperclip icon, once a model is loaded) " +
+                    "and ask Byte questions about it\n\n" +
                     "Commands (type in chat):\n" +
                     "  /model              loaded model's info\n" +
                     "  /specs              device hardware/platform info\n" +
@@ -235,6 +272,68 @@ class MainActivity : AppCompatActivity() {
     ) { uri ->
         Log.i(TAG, "Selected file uri:\n $uri")
         uri?.let { handleSelectedModel(it) }
+    }
+
+    private val getDocumentContent = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { handleAttachment(it) }
+    }
+
+    /**
+     * Extracts text from a picked PDF/Word document (DocumentExtract.kt) and feeds it into
+     * the model's context as a turn, so the rest of the conversation can reference it -- no
+     * desktop CLI equivalent, an Android-only feature. The extracted text isn't shown as the
+     * user's chat bubble (could be thousands of characters); a short "[Attached a PDF]"
+     * summary is shown instead, same pattern as weather/wiki/news context being hidden from
+     * the displayed bubble while still present in what's actually sent to the model (see
+     * handleUserInput()).
+     */
+    private fun handleAttachment(uri: Uri) {
+        val mime = contentResolver.getType(uri)
+        val kind = when (mime) {
+            "application/pdf" -> "PDF"
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> "Word document"
+            else -> "document"
+        }
+
+        userInputEt.isEnabled = false
+        userActionFab.isEnabled = false
+        attachFab.isEnabled = false
+        messages.add(Message(UUID.randomUUID().toString(), "[Attached a $kind]", true))
+        messageAdapter.notifyDataSetChanged()
+
+        generationJob = lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val text = when (mime) {
+                    "application/pdf" -> DocumentExtract.extractPdfText(this@MainActivity, uri)
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ->
+                        DocumentExtract.extractDocxText(this@MainActivity, uri)
+                    else -> null
+                }
+
+                if (text.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        messages.add(
+                            Message(UUID.randomUUID().toString(), "I couldn't extract any text from that $kind.", false)
+                        )
+                        messageAdapter.notifyDataSetChanged()
+                    }
+                    return@launch
+                }
+
+                val prompt = "The user just attached a $kind (${text.length} characters). Its content:\n\n" +
+                    text + "\n\nAcknowledge briefly that you've read it and are ready to answer questions about it."
+                val response = streamGeneration(prompt)
+                handlePotentialToolRequest(response)
+            } finally {
+                withContext(Dispatchers.Main) {
+                    userInputEt.isEnabled = true
+                    userActionFab.isEnabled = true
+                    attachFab.isEnabled = true
+                }
+            }
+        }
     }
 
     /**
@@ -273,6 +372,7 @@ class MainActivity : AppCompatActivity() {
                         userInputEt.isEnabled = true
                         userActionFab.setImageResource(R.drawable.outline_send_24)
                         userActionFab.isEnabled = true
+                        attachFab.visibility = android.view.View.VISIBLE
                     }
                 }
             }
@@ -368,6 +468,7 @@ class MainActivity : AppCompatActivity() {
                 userActionFab.setImageResource(R.drawable.outline_send_24)
                 userActionFab.isEnabled = true
                 downloadFab.visibility = android.view.View.GONE
+                attachFab.visibility = android.view.View.VISIBLE
             }
         } catch (e: Exception) {
             Log.e(TAG, "Model download failed", e)
@@ -487,6 +588,11 @@ class MainActivity : AppCompatActivity() {
      * the tool, and streams one follow-up generation with the result into a fresh bubble.
      * Single follow-up only, same as the desktop CLI -- the follow-up prompt's phrasing
      * steers the model toward answering, not chaining further tool requests.
+     *
+     * If the tool comes back with nothing (e.g. it tried to wiki-look-up something that
+     * isn't a real lookup target, like a statement the user made about their own phone),
+     * the follow-up asks it to just answer directly instead -- a dead-end "I couldn't find
+     * that" reply is worse than the model just responding normally without the lookup.
      */
     private suspend fun handlePotentialToolRequest(response: String) {
         val (name, query) = Tools.parseToolRequest(response) ?: return
@@ -497,14 +603,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         val result = executeToolByName(name, query)
-        if (result != null) {
-            streamGeneration("Tool result for \"$query\": $result\nNow answer the user's original question using this.")
+        val followup = if (result != null) {
+            "Tool result for \"$query\": $result\nNow answer the user's original question using this."
         } else {
-            withContext(Dispatchers.Main) {
-                messages.add(Message(UUID.randomUUID().toString(), "I tried to look that up but couldn't get a result.", false))
-                messageAdapter.notifyDataSetChanged()
-            }
+            "That lookup didn't find anything for \"$query\". Don't mention the failed lookup -- " +
+                "just respond to the user directly and naturally using what you already know, " +
+                "without using any tool this time."
         }
+        streamGeneration(followup)
     }
 
     /**
@@ -556,6 +662,8 @@ class MainActivity : AppCompatActivity() {
                     "A model is already loaded -- type /model to see its info."
                 } else if (!downloadFab.isEnabled) {
                     "Already downloading -- check the status text above the chat."
+                } else if (!promptForStorageAccessIfNeeded()) {
+                    null // toast + settings screen already shown; nothing more to say here
                 } else {
                     downloadFab.isEnabled = false
                     userActionFab.isEnabled = false
@@ -681,13 +789,42 @@ class MainActivity : AppCompatActivity() {
         }
 
     /**
-     * Create the `models` directory if not exist.
+     * Creates (if needed) and returns Byte/models/ under shared storage, mirroring
+     * ~/Byte/models/ on the desktop CLI -- a real, user-visible directory (usable from a
+     * file manager, and surviving app uninstall) rather than the app's private sandbox.
+     * Requires MANAGE_EXTERNAL_STORAGE ("All files access"), since a fixed conventional
+     * path outside the app's own folder isn't reachable via scoped-storage APIs like SAF or
+     * MediaStore. Falls back to internal storage if that permission isn't granted, so the
+     * app still works before the user grants it (see requestAllFilesAccessIfNeeded()).
      */
-    private fun ensureModelsDirectory() =
-        File(filesDir, DIRECTORY_MODELS).also {
-            if (it.exists() && !it.isDirectory) { it.delete() }
-            if (!it.exists()) { it.mkdir() }
+    private fun ensureModelsDirectory(): File {
+        val base = if (Environment.isExternalStorageManager()) {
+            File(Environment.getExternalStorageDirectory(), "Byte")
+        } else {
+            filesDir
         }
+        return File(base, DIRECTORY_MODELS).also {
+            if (it.exists() && !it.isDirectory) { it.delete() }
+            it.mkdirs()
+        }
+    }
+
+    /**
+     * Prompts for MANAGE_EXTERNAL_STORAGE via the system's dedicated settings screen -- this
+     * permission can't be requested through the normal runtime-permission dialog, only by
+     * sending the user to Settings. Safe to call repeatedly; it's a no-op once granted.
+     */
+    private fun requestAllFilesAccessIfNeeded() {
+        if (Environment.isExternalStorageManager()) return
+        try {
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))
+            )
+        } catch (e: Exception) {
+            // some OEM/Android builds lack the per-app variant of this screen
+            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
+    }
 
     override fun onStop() {
         generationJob?.cancel()
@@ -745,11 +882,15 @@ class MainActivity : AppCompatActivity() {
                 "To do that, reply with ONLY this exact line and nothing else: " +
                 "TOOL: <name> <query>  (e.g. \"TOOL: weather Tokyo\", \"TOOL: wiki Eiffel Tower\"). " +
                 "The wiki tool in particular is a real, working Wikipedia lookup you have direct " +
-                "access to -- use it whenever a question is about a specific real-world person, " +
+                "access to -- use it whenever a QUESTION is about a specific real-world person, " +
                 "place, thing, or event and no Wikipedia context was already given to you, rather " +
                 "than answering from memory alone or declining to answer. Do not say you lack " +
                 "real-time or lookup access when a tool is available to you; request it instead. " +
-                "Only do this when you truly cannot answer without it; never combine it with other " +
+                "But do NOT look anything up when the user is simply telling you something about " +
+                "themselves or their own setup (e.g. \"I'm using a Galaxy S26 Ultra\", \"my name is " +
+                "X\") -- that's not a question, and nothing needs verifying; just acknowledge it " +
+                "naturally in your own reply. Only do this when you truly cannot answer without it; " +
+                "never combine it with other " +
                 "text, and never output more than one TOOL: line in a single response -- only the " +
                 "first is ever used. If you are instead just describing or listing what tools you " +
                 "have (e.g. someone asks \"what can you do\"), describe them in plain prose -- the " +

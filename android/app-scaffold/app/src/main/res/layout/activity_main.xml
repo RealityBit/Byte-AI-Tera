@@ -128,6 +128,22 @@
                 android:hint="Type Here!" />
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/attach_fab"
+                android:enabled="true"
+                android:visibility="gone"
+                style="@style/Widget.Material3.FloatingActionButton.Small.Secondary"
+                app:backgroundTint="@color/byte_black"
+                app:tint="@color/byte_green"
+                app:borderWidth="0dp"
+                app:elevation="0dp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:contentDescription="Attach a PDF or Word document"
+                android:src="@drawable/outline_attach_file_24" />
+
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
                 android:id="@+id/download_fab"
                 android:enabled="true"
                 style="@style/Widget.Material3.FloatingActionButton.Small.Secondary"
