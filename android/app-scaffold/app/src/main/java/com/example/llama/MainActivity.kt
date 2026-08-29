@@ -65,6 +65,18 @@ class MainActivity : AppCompatActivity() {
         set(value) = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .putString(PREF_KEY_USER_NAME, value).apply()
 
+    // Unit preferences for weatherFetch -- no desktop CLI equivalent (its weather_fetch.cpp
+    // always reports Celsius/km-h), added specifically for the Android app
+    private var useFahrenheit: Boolean
+        get() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_KEY_FAHRENHEIT, false)
+        set(value) = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putBoolean(PREF_KEY_FAHRENHEIT, value).apply()
+
+    private var useMetric: Boolean
+        get() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_KEY_METRIC, true)
+        set(value) = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putBoolean(PREF_KEY_METRIC, value).apply()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -114,16 +126,54 @@ class MainActivity : AppCompatActivity() {
      * wiki/news/weather/math/etc -- aren't ported yet, see android/README.md).
      */
     private fun showSettingsMenu() {
-        val options = arrayOf("Set your name", "Clear chat", "Help / what's available")
+        val options = arrayOf("Set your name", "Units (temperature, measurement)", "Clear chat", "Help / what's available")
         AlertDialog.Builder(this)
             .setTitle("Byte AI settings")
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> showSetNameDialog()
-                    1 -> clearChat()
-                    2 -> showHelpDialog()
+                    1 -> showUnitsDialog()
+                    2 -> clearChat()
+                    3 -> showHelpDialog()
                 }
             }
+            .show()
+    }
+
+    /**
+     * Lets the user pick Celsius/Fahrenheit and metric/customary for weatherFetch --
+     * unlike temperature-in-a-query ("100F to celsius", handled by Tools.unitFetch, which
+     * always states the unit explicitly), weather reports don't specify a unit up front, so
+     * there's a real preference to remember here. No desktop CLI equivalent (its
+     * weather_fetch.cpp always reports Celsius/km-h).
+     */
+    private fun showUnitsDialog() {
+        val tempOptions = arrayOf("Celsius", "Fahrenheit")
+        val systemOptions = arrayOf("Metric (km/h)", "Customary (mph)")
+        var tempChoice = if (useFahrenheit) 1 else 0
+        var systemChoice = if (useMetric) 0 else 1
+
+        AlertDialog.Builder(this)
+            .setTitle("Temperature")
+            .setSingleChoiceItems(tempOptions, tempChoice) { _, which -> tempChoice = which }
+            .setPositiveButton("Next") { _, _ ->
+                useFahrenheit = tempChoice == 1
+                AlertDialog.Builder(this)
+                    .setTitle("Measurement system")
+                    .setSingleChoiceItems(systemOptions, systemChoice) { _, which -> systemChoice = which }
+                    .setPositiveButton("Save") { _, _ ->
+                        useMetric = systemChoice == 0
+                        Toast.makeText(
+                            this,
+                            "Saved -- ${if (useFahrenheit) "Fahrenheit" else "Celsius"}, " +
+                                if (useMetric) "metric" else "customary",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
@@ -157,15 +207,24 @@ class MainActivity : AppCompatActivity() {
                 "Available here:\n" +
                     "- Chat with Byte, powered by your loaded GGUF model\n" +
                     "- Pick a local GGUF file, or download Byte's own model from GitHub\n" +
-                    "- Set your name and clear the chat (gear menu)\n" +
-                    "- Type /model in chat to see the loaded model's info\n" +
+                    "- Set your name, weather units, and clear the chat (gear menu)\n" +
                     "- Math (\"2+3\", \"10 times 5\") and unit conversion (\"10km in miles\")\n" +
                     "- Current date/time, including US timezones (\"what time is it in pacific?\")\n" +
                     "- Live weather (\"weather in Tokyo\"), HackerNews/Dev.to (\"hackernews\"), " +
                     "and Wikipedia lookups for real-world questions\n\n" +
+                    "Commands (type in chat):\n" +
+                    "  /model              loaded model's info\n" +
+                    "  /specs              device hardware/platform info\n" +
+                    "  /version, /ver      app version\n" +
+                    "  /user <name>        tell Byte your name (persisted)\n" +
+                    "  /newchat            clear the current chat\n" +
+                    "  /wipecfg            reset name + unit preferences\n" +
+                    "  /downloadmodel      download Byte's model from GitHub\n" +
+                    "  /bye, /quit, /exit  close the app\n\n" +
                     "Not yet ported from the desktop CLI: saved/named conversations, /forget, " +
-                    "scheduling, and cross-session memory search. See the project's " +
-                    "android/README.md for what's planned."
+                    "scheduling, cross-session memory search, and the curated knowledge base " +
+                    "(typing one of those commands will tell you it's not available yet). " +
+                    "See the project's android/README.md for what's planned."
             )
             .setPositiveButton("Got it", null)
             .show()
@@ -413,7 +472,7 @@ class MainActivity : AppCompatActivity() {
         // weatherFetch extracts the location via a "weather in/for/at <place>" regex, so a
         // bare model-provided location needs wrapping first, same fix as the desktop CLI
         // (observed there: asked for Tokyo, got weather for the requester's IP location instead)
-        "weather" -> Tools.weatherFetch("weather in $query")
+        "weather" -> Tools.weatherFetch("weather in $query", useFahrenheit, useMetric)
         "news" -> Tools.newsFetch(query)
         "wiki" -> Tools.wikiFetch(query)?.second
         "specs" -> gatherAndroidSpecs()
@@ -449,6 +508,84 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Slash commands typed in chat, mirroring the desktop CLI's command set where a real
+     * Android equivalent exists -- answered directly and never sent to the model, same as
+     * /model. Commands with no Android equivalent yet (saved/named chats, /forget,
+     * scheduling, knowledge base, model switching -- none of that infrastructure is ported,
+     * see android/README.md) get an honest "not available" reply instead of being silently
+     * forwarded to the model as chat text, which would just confuse it.
+     *
+     * @return true if [raw] was handled as a command (caller should stop here)
+     */
+    private fun handleSlashCommand(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (!trimmed.startsWith("/")) return false
+
+        val spaceIdx = trimmed.indexOf(' ')
+        val cmd = (if (spaceIdx < 0) trimmed else trimmed.substring(0, spaceIdx)).lowercase()
+        val arg = if (spaceIdx < 0) "" else trimmed.substring(spaceIdx + 1).trim()
+
+        val reply: String? = when (cmd) {
+            "/model" -> loadedModelInfo
+            "/specs" -> gatherAndroidSpecs().trim()
+            "/version", "/ver" -> "Byte AI 4.0 \"Tera\" -- Android"
+            "/help", "/?" -> {
+                showHelpDialog()
+                return true
+            }
+            "/user" -> {
+                if (arg.isEmpty()) {
+                    "usage: /user <name>  (or use the gear menu)"
+                } else {
+                    userName = arg
+                    messageAdapter.notifyDataSetChanged()
+                    "Got it -- I'll call you $userName."
+                }
+            }
+            "/newchat" -> {
+                clearChat()
+                "Started a new chat."
+            }
+            "/wipecfg" -> {
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply()
+                messageAdapter.notifyDataSetChanged()
+                "Config wiped -- name and unit preferences reset to defaults."
+            }
+            "/downloadmodel" -> {
+                if (isModelReady) {
+                    "A model is already loaded -- type /model to see its info."
+                } else if (!downloadFab.isEnabled) {
+                    "Already downloading -- check the status text above the chat."
+                } else {
+                    downloadFab.isEnabled = false
+                    userActionFab.isEnabled = false
+                    lifecycleScope.launch(Dispatchers.IO) { downloadByteModel() }
+                    "Downloading Byte's model from GitHub..."
+                }
+            }
+            "/bye", "/quit", "/end", "/exit" -> {
+                finish()
+                return true
+            }
+            "/namechat", "/save", "/load", "/history", "/delchat", "/forget", "/secret",
+            "/schedule", "/schedules", "/unschedule", "/knowledge", "/listmods", "/switchmod",
+            "/modeset" ->
+                "$cmd isn't available on Android yet -- it needs infrastructure (saved chats, " +
+                    "scheduling, cross-session memory, or model management) that hasn't been " +
+                    "ported from the desktop CLI. See android/README.md for what's planned."
+            else -> return false
+        }
+
+        userInputEt.text = null
+        messages.add(Message(UUID.randomUUID().toString(), raw, true))
+        if (reply != null) {
+            messages.add(Message(UUID.randomUUID().toString(), reply, false))
+        }
+        messageAdapter.notifyDataSetChanged()
+        return true
+    }
+
+    /**
      * Validate and send the user message into [InferenceEngine]
      */
     private fun handleUserInput() {
@@ -457,14 +594,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Input message is empty!", Toast.LENGTH_SHORT).show()
             return
         }
-        if (userMsg.trim().equals("/model", ignoreCase = true)) {
-            // Mirrors the desktop CLI's /model -- answered directly, never sent to the model
-            userInputEt.text = null
-            messages.add(Message(UUID.randomUUID().toString(), userMsg, true))
-            messages.add(Message(UUID.randomUUID().toString(), loadedModelInfo, false))
-            messageAdapter.notifyDataSetChanged()
-            return
-        }
+        if (handleSlashCommand(userMsg)) return
 
         userInputEt.text = null
         userInputEt.isEnabled = false
@@ -496,7 +626,7 @@ class MainActivity : AppCompatActivity() {
                 // turn_input augmentation for weather/news/wiki
                 var promptForModel = userMsg
                 when {
-                    Tools.weatherIsRequested(userMsg) -> Tools.weatherFetch(userMsg)?.let { weather ->
+                    Tools.weatherIsRequested(userMsg) -> Tools.weatherFetch(userMsg, useFahrenheit, useMetric)?.let { weather ->
                         promptForModel = "A weather API was just called for this request and returned " +
                             "real, current data (not something you need to disclaim): $weather. Report " +
                             "it directly and naturally, with no hedging about data access.\n" +
@@ -577,6 +707,8 @@ class MainActivity : AppCompatActivity() {
 
         private const val PREFS_NAME = "byte_prefs"
         private const val PREF_KEY_USER_NAME = "user_name"
+        private const val PREF_KEY_FAHRENHEIT = "use_fahrenheit"
+        private const val PREF_KEY_METRIC = "use_metric"
 
         private const val MANIFEST_URL =
             "https://raw.githubusercontent.com/RetroGigabyte/Byte-AI-Models/main/manifest.json"

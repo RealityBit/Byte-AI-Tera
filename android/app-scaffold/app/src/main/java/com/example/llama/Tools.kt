@@ -269,20 +269,28 @@ object Tools {
 
     private val weatherLocRe = Regex("""weather (?:in|for|at)\s+(.+?)[?.!]*$""", RegexOption.IGNORE_CASE)
 
-    fun weatherFetch(query: String): String? {
+    /**
+     * @param fahrenheit report temperature in Fahrenheit instead of Celsius
+     * @param metric report wind speed in km/h instead of mph -- wttr.in already returns
+     *   both units per field (temp_C/temp_F, windspeedKmph/windspeedMiles), so this just
+     *   picks which one to read rather than doing any conversion math
+     */
+    fun weatherFetch(query: String, fahrenheit: Boolean = false, metric: Boolean = true): String? {
         val location = weatherLocRe.find(query)?.groupValues?.get(1) ?: ""
         val encoded = URLEncoder.encode(location, "UTF-8")
         val body = httpGet("https://wttr.in/$encoded?format=j1") ?: return null
         return try {
             val data = JSONObject(body)
             val current = data.getJSONArray("current_condition").getJSONObject(0)
-            val tempC = current.optString("temp_C", "?")
+            val temp = current.optString(if (fahrenheit) "temp_F" else "temp_C", "?")
+            val tempUnit = if (fahrenheit) "F" else "C"
             val humidity = current.optString("humidity", "?")
-            val windKph = current.optString("windspeedKmph", "?")
+            val wind = current.optString(if (metric) "windspeedKmph" else "windspeedMiles", "?")
+            val windUnit = if (metric) "km/h" else "mph"
             val condition = current.optJSONArray("weatherDesc")?.optJSONObject(0)?.optString("value") ?: "unknown"
             val areaName = data.optJSONArray("nearest_area")?.optJSONObject(0)
                 ?.optJSONArray("areaName")?.optJSONObject(0)?.optString("value") ?: "your location"
-            "Weather in $areaName: $tempC C, $condition, humidity $humidity%, wind $windKph km/h"
+            "Weather in $areaName: $temp $tempUnit, $condition, humidity $humidity%, wind $wind $windUnit"
         } catch (e: Exception) {
             null
         }
